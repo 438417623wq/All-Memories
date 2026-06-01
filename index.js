@@ -1523,13 +1523,24 @@ async function runMemoryGraphUpdate(reason = 'auto') {
     try {
         const graph = getMemoryGraph();
         const prompt = buildMemoryExtractionPrompt(recentMessages, graph);
-        const raw = await context.generateRaw({
-            prompt,
-            systemPrompt: '你是严格 JSON 输出的长期记忆图谱整理器。不要输出 Markdown，不要解释。',
-            responseLength: 1024,
-            trimNames: false,
-            jsonSchema: getMemoryExtractionSchema(),
-        });
+        const memorySystemPrompt = '你是严格 JSON 输出的长期记忆图谱整理器。不要输出 Markdown，不要解释。';
+        let raw;
+        if (settings.routerUseSeparateModel && settings.routerApiUrl && settings.routerApiKey && settings.routerModel) {
+            const data = getSeparateModelRequestData(context, prompt, {
+                systemPrompt: memorySystemPrompt,
+                maxTokens: 1024,
+                jsonSchema: getMemoryExtractionSchema(),
+            });
+            raw = await context.ChatCompletionService.sendRequest(data, true);
+        } else {
+            raw = await context.generateRaw({
+                prompt,
+                systemPrompt: memorySystemPrompt,
+                responseLength: 1024,
+                trimNames: false,
+                jsonSchema: getMemoryExtractionSchema(),
+            });
+        }
         const update = parseMemoryUpdate(raw, prompt);
         applyMemoryGraphUpdate(update);
         settings.memoryLastTurnSignature = signature;
@@ -2083,24 +2094,36 @@ function parseSelectionJson(rawResponse, candidates = [], prompt = '') {
     throw createSelectionParseError(rawResponse, texts.join(' '), prompt);
 }
 
-function getRouterMessages(prompt) {
+function getRouterMessages(prompt, systemPrompt = settings.systemPrompt) {
     return [
-        { role: 'system', content: settings.systemPrompt },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: prompt },
     ];
 }
 
-function getRouterRequestData(context, prompt) {
+function getSeparateModelRequestData(context, prompt, {
+    systemPrompt = settings.systemPrompt,
+    maxTokens = Math.max(settings.aiResponseLength, 384),
+    jsonSchema = getSelectionSchema(),
+} = {}) {
     return context.ChatCompletionService.createRequestData({
         stream: false,
-        messages: getRouterMessages(prompt),
+        messages: getRouterMessages(prompt, systemPrompt),
         model: settings.routerModel,
         chat_completion_source: 'openai',
-        max_tokens: Math.max(settings.aiResponseLength, 384),
+        max_tokens: maxTokens,
         temperature: 0,
         reverse_proxy: normalizeUrl(settings.routerApiUrl),
         proxy_password: String(settings.routerApiKey || ''),
-        json_schema: getSelectionSchema(),
+        json_schema: jsonSchema,
+    });
+}
+
+function getRouterRequestData(context, prompt) {
+    return getSeparateModelRequestData(context, prompt, {
+        systemPrompt: settings.systemPrompt,
+        maxTokens: Math.max(settings.aiResponseLength, 384),
+        jsonSchema: getSelectionSchema(),
     });
 }
 
