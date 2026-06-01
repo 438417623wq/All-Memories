@@ -42,20 +42,13 @@ const COMMON_QUERY_TERMS = new Set([
 ]);
 
 const defaultSystemPrompt = `你是 SillyTavern 的前置世界书路由器。
-
-你的任务：
-只根据最近聊天上下文、最后用户消息、可选状态、以及候选条目的 keys，选择本轮真正相关的世界书条目。
-
-必须遵守：
-1. 只输出严格 JSON，不要 Markdown，不要代码块，不要解释。
-2. 不要输出分析过程，不要输出 reasoning 字段。
-3. 不要返回 id，不要返回标题，只返回命中的 key。
-4. 只能返回候选条目中实际存在的 key。
-5. 如果没有合适条目，返回 {"selected":[]}。
-6. 每个 reason 保持简短。
-
-唯一合法输出格式：
-{"selected":[{"key":"命中的 key","reason":"简短原因"}]}`;
+只做一件事：从候选 keys 中选择本轮真正相关的条目。
+只输出严格 JSON。
+禁止 Markdown。
+禁止解释。
+禁止 reasoning。
+禁止额外字段。
+唯一合法格式：{"selected":[{"key":"命中的 key","reason":"简短原因"}]}`;
 
 const defaultSettings = {
     enabled: false,
@@ -1279,30 +1272,50 @@ function buildMemoryExtractionPrompt(recentMessages, graph) {
         })),
     }, null, 2), 4200);
 
-    return `你是 SillyTavern 的后置轻量记忆变量块输出器。
+    return `<role>你是 SillyTavern 的后置轻量记忆变量块输出器。</role>
 
-你的唯一任务：从最近对话里提取“对后续 RP / 剧情推进仍有用”的记忆，直接输出固定变量块。
+<task>
+从最近对话里提取“对后续 RP / 剧情推进仍有用”的记忆。
+只返回固定变量块。
+</task>
 
-必须遵守：
-- 不要输出 JSON 对象。
-- 不要输出 Markdown。
-- 不要输出解释、分析、reasoning、前后缀。
-- 不要返回 {content:{}}。
-- 只允许输出变量块本体。
+<rules>
+1. 不要输出 JSON 对象。
+2. 不要输出 Markdown。
+3. 不要输出解释、分析、reasoning、前后缀。
+4. 不要返回 {content:{}}。
+5. 只允许输出变量块本体。
+6. 如果最近对话存在剧情推进、角色互动、地点变化、任务变化、世界观设定、重要承诺、冲突、发现、战斗、交易、关系变化，memory_nodes_json 必须至少有 1 个节点。
+7. 角色扮演场景里，只要互动会影响后续扮演，也要压缩成 event / character / location / quest 节点。
+8. 已有同义节点优先写入 memory_updates_json，不要重复造节点。
+</rules>
 
-写入原则：
-- 如果最近对话存在剧情推进、角色互动、地点变化、任务变化、世界观设定、重要承诺、冲突、发现、战斗、交易、关系变化，memory_nodes_json 必须至少有 1 个节点。
-- 角色扮演场景里，只要互动会影响后续扮演，也要压缩成 event / character / location / quest 节点。
-- 优先补充当前地点、当前目标、活跃主题、未解问题。
-- 已有同义节点优先写入 memory_updates_json，不要重复造节点。
+<example>
+输入剧情：角色逃跑，被导师用魔法拦住。
+正确输出：
+[[AIWBR_MEMORY_VARS_BEGIN]]
+memory_state_current_location_json="小巷口"
+memory_state_current_objective_json="脱身"
+memory_active_topics_json=["逃跑","拦截","导师"]
+memory_open_questions_json=["导师会如何处置主角？"]
+memory_nodes_json=[{"id":"event_escape_blocked","title":"逃跑被导师拦住","type":"event","content":"主角试图逃跑，被导师用魔法阻断去路。","tags":["冲突"],"importance":0.8,"credibility":0.9}]
+memory_updates_json=[]
+memory_links_json=[]
+memory_remove_node_ids_json=[]
+memory_remove_link_ids_json=[]
+memory_summary_json="本轮新增了主角逃跑并被导师拦截的关键冲突事件。"
+[[AIWBR_MEMORY_VARS_END]]
+</example>
 
-现有记忆图谱：
+<current_graph>
 ${currentGraph || '{}'}
+</current_graph>
 
-最近对话（已过滤世界书注入与内部草稿噪声）：
+<recent_dialogue>
 ${recentContext || '(空)'}
+</recent_dialogue>
 
-你必须只返回下面这个变量块，字段名一字不差，所有右侧内容都必须是单行 JSON 值：
+<required_output>
 
 [[AIWBR_MEMORY_VARS_BEGIN]]
 memory_state_current_location_json=""
@@ -1316,20 +1329,19 @@ memory_remove_node_ids_json=[]
 memory_remove_link_ids_json=[]
 memory_summary_json=""
 [[AIWBR_MEMORY_VARS_END]]
+</required_output>
 
-规则：
-1. 以上 10 行必须全部输出，顺序不要变。
+<field_rules>
+1. 上面 10 行必须全部输出，顺序不要变。
 2. 每行等号右边必须是合法 JSON 值；字符串用 "...", 数组用 [...]。
 3. 如果没有内容，字符串填 ""，数组填 []。
-4. memory_nodes_json 中每个节点格式：
-   {"id":"稳定英文或拼音id","title":"简短标题","type":"event|character|location|faction|item|concept|rule|quest","content":"已确认事实","tags":["标签"],"importance":0.6,"credibility":0.8}
-5. memory_links_json 中每个关系格式：
-   {"source":"源节点id或标题","target":"目标节点id或标题","type":"INVOLVES|PART_OF|HAPPENS_AT|FOLLOWS|UPDATES|OPPOSES|ALLIED_WITH|CAUSES|RELATED","weight":0.7,"description":"关系证据"}
-6. 如果最近对话存在剧情推进/角色互动/设定变化，memory_nodes_json 不能为空。
-7. memory_summary_json 必须概括“为什么值得写入”；只有确实没有长期价值时才允许是 ""。
-8. 不要输出任何额外字段。
-
-请开始输出变量块。`;
+4. memory_nodes_json 节点格式：
+{"id":"稳定英文或拼音id","title":"简短标题","type":"event|character|location|faction|item|concept|rule|quest","content":"已确认事实","tags":["标签"],"importance":0.6,"credibility":0.8}
+5. memory_links_json 关系格式：
+{"source":"源节点id或标题","target":"目标节点id或标题","type":"INVOLVES|PART_OF|HAPPENS_AT|FOLLOWS|UPDATES|OPPOSES|ALLIED_WITH|CAUSES|RELATED","weight":0.7,"description":"关系证据"}
+6. memory_summary_json 必须概括“为什么值得写入”；只有确实没有长期价值时才允许是 ""。
+7. 不要输出任何额外字段。
+</field_rules>`;
 }
 
 function buildMemoryExtractionRetryPrompt(recentMessages, graph) {
@@ -1343,19 +1355,13 @@ function buildMemoryExtractionRetryPrompt(recentMessages, graph) {
         node_titles: (graph.nodes || []).slice(-8).map(node => ({ id: node.id, title: node.title, type: node.type })),
     }, null, 2);
 
-    return `你是后置轻量记忆整理器。不要思考过程，不要解释，不要空回复。
-
-你的唯一任务：根据最近对话，为长期 RP / 剧情状态输出固定变量块。
-
-当前图谱摘要：
-${compactState}
-
-最近对话：
-${compactContext || '(空)'}
-
-如果存在剧情推进、角色互动、地点变化、任务变化、设定变化，memory_nodes_json 必须至少有 1 个节点。
-
-只允许输出以下变量块，完整照抄字段名，等号右边必须是单行 JSON 值：
+    return `<role>你是后置轻量记忆整理器。</role>
+<task>根据最近对话，为长期 RP / 剧情状态输出固定变量块。</task>
+<rules>不要思考过程；不要解释；不要空回复；不要 JSON 对象；只输出变量块。</rules>
+<current_graph>${compactState}</current_graph>
+<recent_dialogue>${compactContext || '(空)'}</recent_dialogue>
+<rule>如果存在剧情推进、角色互动、地点变化、任务变化、设定变化，memory_nodes_json 必须至少有 1 个节点。</rule>
+<required_output>
 [[AIWBR_MEMORY_VARS_BEGIN]]
 memory_state_current_location_json=""
 memory_state_current_objective_json=""
@@ -1367,7 +1373,8 @@ memory_links_json=[]
 memory_remove_node_ids_json=[]
 memory_remove_link_ids_json=[]
 memory_summary_json=""
-[[AIWBR_MEMORY_VARS_END]]`;
+[[AIWBR_MEMORY_VARS_END]]
+</required_output>`;
 }
 
 function parseMemoryUpdate(rawResponse, prompt = '') {
@@ -1993,22 +2000,48 @@ function buildAiPrompt(recentMessages, mvuSummary, candidates) {
         return `- ${keys}`;
     }).join('\n');
 
-    return `选择最多 ${settings.maxSelected} 条本轮相关世界书。
+    return `<task>
+从候选 keys 中选择最多 ${settings.maxSelected} 条“本轮真正相关”的世界书。
+</task>
 
-最后用户消息：
+<rules>
+1. 只能从候选 keys 中选。
+2. 只输出严格 JSON。
+3. 禁止 Markdown、禁止解释、禁止 reasoning、禁止额外字段。
+4. 不要返回标题，不要返回 id，只返回命中的 key。
+5. 如果没有合适条目，输出 {"selected":[]}。
+</rules>
+
+<output_format>
+{"selected":[{"key":"命中的 key","reason":"简短原因"}]}
+</output_format>
+
+<example>
+输入：
+最后用户消息：我想偷偷补完魔法阵然后逃跑
+候选 keys：
+- 魔法 / 魔法阵 / 画魔法
+- 奇夫利 / 老师
+- 魔法商品 / 魔法器
+输出：
+{"selected":[{"key":"魔法阵","reason":"用户正在补画魔法阵"},{"key":"奇夫利","reason":"当前互动对象是奇夫利"}]}
+</example>
+
+<last_user_message>
 ${lastUserMessage || '(空)'}
+</last_user_message>
 
-最近上下文：
+<recent_context>
 ${recentContext || '(空)'}
+</recent_context>
 
-MVU/stat_data：
+<state_summary>
 ${mvuSummary || '(未启用或未读取到)'}
+</state_summary>
 
-候选 keys（每行一条）：
+<candidate_keys>
 ${candidateText || '(无)'}
-
-如果没有合适条目，返回 {"selected":[]}
-只输出严格 JSON：{"selected":[{"key":"命中的 key","reason":"选择原因"}]}`;
+</candidate_keys>`;
 }
 
 function buildCompactAiPrompt(recentMessages, mvuSummary, candidates) {
@@ -2023,22 +2056,15 @@ function buildCompactAiPrompt(recentMessages, mvuSummary, candidates) {
         .map(entry => `- ${(entry.keys.all.length ? entry.keys.all.join(' / ') : '(无 keys)')}`)
         .join('\n');
 
-    return `选择最多 ${settings.maxSelected} 条本轮相关世界书。
-
-最后用户消息：
-${lastUserMessage || '(空)'}
-
-最近几条上下文：
-${compactContext || '(空)'}
-
-状态摘要：
-${compactSummary || '(无)'}
-
-候选 keys：
+    return `<task>从候选 keys 中选择最多 ${settings.maxSelected} 条本轮相关世界书。</task>
+<rules>只输出严格 JSON；禁止解释；禁止 reasoning；禁止额外字段；如果没有合适条目，输出 {"selected":[]}。</rules>
+<output>{"selected":[{"key":"命中的 key","reason":"简短原因"}]}</output>
+<last_user_message>${lastUserMessage || '(空)'}</last_user_message>
+<recent_context>${compactContext || '(空)'}</recent_context>
+<state_summary>${compactSummary || '(无)'}</state_summary>
+<candidate_keys>
 ${candidateText || '(无)'}
-
-只输出严格 JSON：{"selected":[{"key":"命中的 key","reason":"选择原因"}]}
-如果没有合适条目，输出 {"selected":[]}`;
+</candidate_keys>`;
 }
 
 function getSelectionSchema() {
