@@ -107,6 +107,9 @@
 
                 <label for="ai_wbr_router_retries"><span class="fa-solid fa-circle-info ai-wbr-help" title="当前置 AI 调用或 JSON 解析失败时，额外自动重试几次。重试时会抛出反转标记；全部失败时会抛出红色 × 并红光闪三下。"></span>前置 AI 重试次数</label>
                 <input id="ai_wbr_router_retries" class="text_pole" type="number" min="0" max="5" step="1" />
+
+                <label for="ai_wbr_router_request_max_tokens"><span class="fa-solid fa-circle-info ai-wbr-help" title="前置世界书路由请求实际发送给模型的 max_tokens 上限。独立模型和非独立模型都使用这个值。"></span>前置请求 tokens 上限</label>
+                <input id="ai_wbr_router_request_max_tokens" class="text_pole" type="number" min="32" max="100000" step="16" />
             </div>
 
             <div class="m-t-1">
@@ -148,6 +151,9 @@
 
                     <label for="ai_wbr_memory_max_links"><span class="fa-solid fa-circle-info ai-wbr-help" title="记忆图谱最多保留多少条关系边。"></span>最大记忆关系数</label>
                     <input id="ai_wbr_memory_max_links" class="text_pole" type="number" min="0" max="400" step="1" />
+
+                    <label for="ai_wbr_memory_request_max_tokens"><span class="fa-solid fa-circle-info ai-wbr-help" title="后置记忆整理请求实际发送给模型的 max_tokens 上限。普通整理和重试都使用这个值。"></span>后置请求 tokens 上限</label>
+                    <input id="ai_wbr_memory_request_max_tokens" class="text_pole" type="number" min="32" max="100000" step="16" />
                 </div>
 
                 <div class="ai-wbr-actions">

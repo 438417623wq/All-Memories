@@ -24,8 +24,6 @@ const MAX_RECALL_TERMS = 32;
 const MAX_ROUTER_CONTEXT_PREVIEW = 360;
 const MAX_BURST_ITEMS = 5;
 const MAX_MEMORY_CONTEXT_PREVIEW = 260;
-const ROUTER_REQUEST_MAX_TOKENS = 10000;
-const MEMORY_REQUEST_MAX_TOKENS = 10000;
 const MEMORY_LINK_TYPES = new Set([
     'INVOLVES', 'PART_OF', 'HAPPENS_AT', 'FOLLOWS', 'UPDATES', 'OPPOSES',
     'ALLIED_WITH', 'CAUSES', 'RELATED', 'MENTIONS',
@@ -61,6 +59,7 @@ const defaultSettings = {
     routerModel: '',
     routerModels: [],
     routerStatus: '未连接',
+    routerRequestMaxTokens: 10000,
     maxCandidates: 24,
     maxSelected: 5,
     maxChars: 4000,
@@ -71,6 +70,7 @@ const defaultSettings = {
     memoryInjectToRouter: true,
     memoryDebug: false,
     memoryScanMessages: 6,
+    memoryRequestMaxTokens: 10000,
     memoryMaxNodes: 60,
     memoryMaxLinks: 120,
     memoryGraph: null,
@@ -1379,6 +1379,14 @@ memory_summary_json=""
 </required_output>`;
 }
 
+function getRouterRequestMaxTokens() {
+    return clampNumber(settings.routerRequestMaxTokens, defaultSettings.routerRequestMaxTokens, 32, 100000);
+}
+
+function getMemoryRequestMaxTokens() {
+    return clampNumber(settings.memoryRequestMaxTokens, defaultSettings.memoryRequestMaxTokens, 32, 100000);
+}
+
 function parseMemoryUpdate(rawResponse, prompt = '') {
     const parseMemoryVariableBlock = (text) => {
         const raw = String(text || '');
@@ -1713,13 +1721,13 @@ async function runMemoryGraphUpdate(reason = 'auto') {
             if (settings.routerUseSeparateModel && settings.routerApiUrl && settings.routerApiKey && settings.routerModel) {
                 raw = await sendSeparateMemoryRequest(context, prompt, {
                     systemPrompt: memorySystemPrompt,
-                    maxTokens: MEMORY_REQUEST_MAX_TOKENS,
+                    maxTokens: getMemoryRequestMaxTokens(),
                 });
             } else {
                 raw = await context.generateRaw({
                     prompt,
                     systemPrompt: memorySystemPrompt,
-                    responseLength: MEMORY_REQUEST_MAX_TOKENS,
+                    responseLength: getMemoryRequestMaxTokens(),
                     trimNames: false,
                 });
             }
@@ -1737,13 +1745,13 @@ async function runMemoryGraphUpdate(reason = 'auto') {
                 if (settings.routerUseSeparateModel && settings.routerApiUrl && settings.routerApiKey && settings.routerModel) {
                     raw = await sendSeparateMemoryRequest(context, retryPrompt, {
                         systemPrompt: '你是变量块输出器。禁止空回复，禁止解释，禁止思考过程，直接输出变量块。',
-                        maxTokens: MEMORY_REQUEST_MAX_TOKENS,
+                        maxTokens: getMemoryRequestMaxTokens(),
                     });
                 } else {
                     raw = await context.generateRaw({
                         prompt: retryPrompt,
                         systemPrompt: '你是变量块输出器。禁止空回复，禁止解释，禁止思考过程，直接输出变量块。',
-                        responseLength: MEMORY_REQUEST_MAX_TOKENS,
+                        responseLength: getMemoryRequestMaxTokens(),
                         trimNames: false,
                     });
                 }
@@ -2411,7 +2419,7 @@ function hasEmptyVisibleContentDueToLength(rawResponse) {
 
 function buildPlainSeparateChatPayload(prompt, {
     systemPrompt = settings.systemPrompt,
-    maxTokens = ROUTER_REQUEST_MAX_TOKENS,
+    maxTokens = getRouterRequestMaxTokens(),
 } = {}) {
     return {
         stream: false,
@@ -2449,7 +2457,7 @@ async function sendSeparateRouterRequest(context, prompt, {
     mvuSummary = '',
     candidates = [],
     systemPrompt = settings.systemPrompt,
-    maxTokens = ROUTER_REQUEST_MAX_TOKENS,
+    maxTokens = getRouterRequestMaxTokens(),
 } = {}) {
     const firstRequest = buildPlainSeparateChatPayload(prompt, {
         systemPrompt,
@@ -2467,7 +2475,7 @@ async function sendSeparateRouterRequest(context, prompt, {
     );
     const retryRequest = buildPlainSeparateChatPayload(compactPrompt, {
         systemPrompt: '你是前置世界书路由 JSON 输出器。禁止解释，禁止 reasoning，只输出 {"selected":[...]}。',
-        maxTokens: ROUTER_REQUEST_MAX_TOKENS,
+        maxTokens: getRouterRequestMaxTokens(),
     });
     raw = await sendPlainSeparateChatRequest(context, retryRequest);
     return { raw, usedRetry: true, usedCompactPrompt: true, retryPrompt: compactPrompt };
@@ -2475,7 +2483,7 @@ async function sendSeparateRouterRequest(context, prompt, {
 
 async function sendSeparateMemoryRequest(context, prompt, {
     systemPrompt,
-    maxTokens = MEMORY_REQUEST_MAX_TOKENS,
+    maxTokens = getMemoryRequestMaxTokens(),
 } = {}) {
     const requestData = buildPlainSeparateChatPayload(prompt, {
         systemPrompt,
@@ -2487,7 +2495,7 @@ async function sendSeparateMemoryRequest(context, prompt, {
 function getRouterRequestData(context, prompt) {
     return buildPlainSeparateChatPayload(prompt, {
         systemPrompt: settings.systemPrompt,
-        maxTokens: ROUTER_REQUEST_MAX_TOKENS,
+        maxTokens: getRouterRequestMaxTokens(),
     });
 }
 
@@ -2498,7 +2506,7 @@ async function selectWithSeparateRouterModel(context, recentMessages, mvuSummary
         mvuSummary,
         candidates,
         systemPrompt: settings.systemPrompt,
-        maxTokens: ROUTER_REQUEST_MAX_TOKENS,
+        maxTokens: getRouterRequestMaxTokens(),
     });
     const promptForParse = result.usedCompactPrompt ? `${prompt}\n\n----- COMPACT RETRY PROMPT -----\n\n${result.retryPrompt}` : prompt;
     const parsed = parseSelectionJson(result.raw, candidates, promptForParse);
@@ -2523,7 +2531,7 @@ async function runSingleAiSelectionAttempt(context, recentMessages, mvuSummary, 
         const raw = await context.generateRaw({
             prompt,
             systemPrompt: settings.systemPrompt,
-            responseLength: ROUTER_REQUEST_MAX_TOKENS,
+            responseLength: getRouterRequestMaxTokens(),
             trimNames: false,
             jsonSchema: getSelectionSchema(),
         });
@@ -3587,6 +3595,8 @@ async function addSettingsUi() {
     bindNumber('#ai_wbr_depth', 'depth', 0, 1000);
     bindNumber('#ai_wbr_ai_response_length', 'aiResponseLength', 32, 16384);
     bindNumber('#ai_wbr_router_retries', 'routerRetries', 0, 5);
+    bindNumber('#ai_wbr_router_request_max_tokens', 'routerRequestMaxTokens', 32, 100000);
+    bindNumber('#ai_wbr_memory_request_max_tokens', 'memoryRequestMaxTokens', 32, 100000);
 
     bindSelectNumber('#ai_wbr_position', 'position');
     bindSelectNumber('#ai_wbr_role', 'role');
