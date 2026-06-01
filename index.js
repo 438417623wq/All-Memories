@@ -2236,14 +2236,16 @@ function summarizeRouterResponse(rawResponse) {
         return stripReasoningForDisplay(rawResponse);
     }
 
+    const texts = collectRouterResponseTexts(rawResponse)
+        .map(text => stripReasoningForDisplay(text))
+        .filter(text => String(text || '').trim());
+    if (texts.length) {
+        return texts.join('\n\n---\n\n');
+    }
+
     try {
         return stripReasoningForDisplay(JSON.stringify(rawResponse, null, 2));
     } catch {
-        const texts = collectRouterResponseTexts(rawResponse);
-        if (texts.length) {
-            return stripReasoningForDisplay(texts.join('\n\n---\n\n'));
-        }
-
         return stripReasoningForDisplay(String(rawResponse));
     }
 }
