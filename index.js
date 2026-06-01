@@ -1702,10 +1702,9 @@ async function runMemoryGraphUpdate(reason = 'auto') {
         try {
             isRouterSelectionRequest = true;
             if (settings.routerUseSeparateModel && settings.routerApiUrl && settings.routerApiKey && settings.routerModel) {
-                raw = await sendSeparateModelWithFallback(context, prompt, {
+                raw = await sendSeparateMemoryRequest(context, prompt, {
                     systemPrompt: memorySystemPrompt,
                     maxTokens: 560,
-                    jsonSchema: undefined,
                 });
             } else {
                 raw = await context.generateRaw({
@@ -1727,10 +1726,9 @@ async function runMemoryGraphUpdate(reason = 'auto') {
             try {
                 isRouterSelectionRequest = true;
                 if (settings.routerUseSeparateModel && settings.routerApiUrl && settings.routerApiKey && settings.routerModel) {
-                    raw = await sendSeparateModelWithFallback(context, retryPrompt, {
+                    raw = await sendSeparateMemoryRequest(context, retryPrompt, {
                         systemPrompt: '你是变量块输出器。禁止空回复，禁止解释，禁止思考过程，直接输出变量块。',
                         maxTokens: 420,
-                        jsonSchema: undefined,
                     });
                 } else {
                     raw = await context.generateRaw({
@@ -2011,6 +2009,36 @@ ${candidateText || '(无)'}
 
 如果没有合适条目，返回 {"selected":[]}
 只输出严格 JSON：{"selected":[{"key":"命中的 key","reason":"选择原因"}]}`;
+}
+
+function buildCompactAiPrompt(recentMessages, mvuSummary, candidates) {
+    const lastUserMessage = truncateText(getLastUserMessage(recentMessages), 220);
+    const compactContext = recentMessages
+        .slice(-4)
+        .map(message => `${message.name || (message.isUser ? 'User' : 'Assistant')}: ${truncateText(message.text, 180)}`)
+        .join('\n');
+    const compactSummary = truncateText(String(mvuSummary || ''), 320);
+    const candidateText = candidates
+        .slice(0, Math.min(candidates.length, 14))
+        .map(entry => `- ${(entry.keys.all.length ? entry.keys.all.join(' / ') : '(无 keys)')}`)
+        .join('\n');
+
+    return `选择最多 ${settings.maxSelected} 条本轮相关世界书。
+
+最后用户消息：
+${lastUserMessage || '(空)'}
+
+最近几条上下文：
+${compactContext || '(空)'}
+
+状态摘要：
+${compactSummary || '(无)'}
+
+候选 keys：
+${candidateText || '(无)'}
+
+只输出严格 JSON：{"selected":[{"key":"命中的 key","reason":"选择原因"}]}
+如果没有合适条目，输出 {"selected":[]}`;
 }
 
 function getSelectionSchema() {
@@ -2351,7 +2379,22 @@ function hasEmptyVisibleContentDueToLength(rawResponse) {
         && !choice.message.content.trim();
 }
 
-function getSeparateModelRequestData(context, prompt, {
+function applyNoThinkingHints(requestData) {
+    requestData.reasoning_effort = 'none';
+    requestData.include_reasoning = false;
+    requestData.extra_body = requestData.extra_body && typeof requestData.extra_body === 'object'
+        ? requestData.extra_body
+        : {};
+    requestData.extra_body.google = requestData.extra_body.google && typeof requestData.extra_body.google === 'object'
+        ? requestData.extra_body.google
+        : {};
+    requestData.extra_body.google.thinking_config = {
+        thinking_budget: 0,
+    };
+    return requestData;
+}
+
+function createSeparateModelRequestData(context, prompt, {
     systemPrompt = settings.systemPrompt,
     maxTokens = Math.max(settings.aiResponseLength, 384),
     jsonSchema = getSelectionSchema(),
@@ -2367,50 +2410,76 @@ function getSeparateModelRequestData(context, prompt, {
         proxy_password: String(settings.routerApiKey || ''),
         json_schema: jsonSchema,
     });
-    requestData.reasoning_effort = 'none';
-    return requestData;
+    if (jsonSchema === undefined) {
+        delete requestData.json_schema;
+    }
+    return applyNoThinkingHints(requestData);
 }
 
-async function sendSeparateModelWithFallback(context, prompt, {
+async function sendSeparateModelRequest(context, requestData) {
+    const response = await fetch('/api/backends/chat-completions/generate', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(typeof context.getRequestHeaders === 'function' ? context.getRequestHeaders() : {}),
+        },
+        cache: 'no-cache',
+        body: JSON.stringify(requestData),
+    });
+
+    const text = await response.text();
+    try {
+        return JSON.parse(text);
+    } catch {
+        return text;
+    }
+}
+
+async function sendSeparateRouterRequest(context, prompt, {
+    recentMessages = [],
+    mvuSummary = '',
+    candidates = [],
     systemPrompt = settings.systemPrompt,
     maxTokens = Math.max(settings.aiResponseLength, 384),
-    jsonSchema = getSelectionSchema(),
 } = {}) {
-    const sendOnce = async (schema) => {
-        const requestData = getSeparateModelRequestData(context, prompt, {
-            systemPrompt,
-            maxTokens,
-            jsonSchema: schema,
-        });
-
-        const response = await fetch('/api/backends/chat-completions/generate', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                ...(typeof context.getRequestHeaders === 'function' ? context.getRequestHeaders() : {}),
-            },
-            cache: 'no-cache',
-            body: JSON.stringify(requestData),
-        });
-
-        const text = await response.text();
-        try {
-            return JSON.parse(text);
-        } catch {
-            return text;
-        }
-    };
-
-    let raw = await sendOnce(jsonSchema);
-    if (!isEffectivelyEmptyStructuredResponse(raw)) {
-        return raw;
+    const firstRequest = createSeparateModelRequestData(context, prompt, {
+        systemPrompt,
+        maxTokens,
+        jsonSchema: getSelectionSchema(),
+    });
+    let raw = await sendSeparateModelRequest(context, firstRequest);
+    if (!isEffectivelyEmptyStructuredResponse(raw) && !hasEmptyVisibleContentDueToLength(raw)) {
+        return { raw, usedRetry: false, usedCompactPrompt: false };
     }
 
-    return await sendOnce(undefined);
+    const compactPrompt = buildCompactAiPrompt(
+        recentMessages,
+        mvuSummary,
+        candidates,
+    );
+    const retryRequest = createSeparateModelRequestData(context, compactPrompt, {
+        systemPrompt: '你是前置世界书路由 JSON 输出器。禁止解释，禁止 reasoning，只输出 {"selected":[...]}。',
+        maxTokens: Math.min(Math.max(settings.aiResponseLength, 180), 220),
+        jsonSchema: undefined,
+    });
+    raw = await sendSeparateModelRequest(context, retryRequest);
+    return { raw, usedRetry: true, usedCompactPrompt: true, retryPrompt: compactPrompt };
+}
+
+async function sendSeparateMemoryRequest(context, prompt, {
+    systemPrompt,
+    maxTokens,
+} = {}) {
+    const requestData = createSeparateModelRequestData(context, prompt, {
+        systemPrompt,
+        maxTokens,
+        jsonSchema: undefined,
+    });
+    return await sendSeparateModelRequest(context, requestData);
 }
 
 function getRouterRequestData(context, prompt) {
-    return getSeparateModelRequestData(context, prompt, {
+    return createSeparateModelRequestData(context, prompt, {
         systemPrompt: settings.systemPrompt,
         maxTokens: Math.max(settings.aiResponseLength, 384),
         jsonSchema: getSelectionSchema(),
@@ -2419,16 +2488,19 @@ function getRouterRequestData(context, prompt) {
 
 async function selectWithSeparateRouterModel(context, recentMessages, mvuSummary, candidates) {
     const prompt = buildAiPrompt(recentMessages, mvuSummary, candidates);
-    const result = await sendSeparateModelWithFallback(context, prompt, {
+    const result = await sendSeparateRouterRequest(context, prompt, {
+        recentMessages,
+        mvuSummary,
+        candidates,
         systemPrompt: settings.systemPrompt,
         maxTokens: Math.max(settings.aiResponseLength, 384),
-        jsonSchema: getSelectionSchema(),
     });
-    const parsed = parseSelectionJson(result, candidates, prompt);
+    const promptForParse = result.usedCompactPrompt ? `${prompt}\n\n----- COMPACT RETRY PROMPT -----\n\n${result.retryPrompt}` : prompt;
+    const parsed = parseSelectionJson(result.raw, candidates, promptForParse);
     return {
         parsed,
-        prompt,
-        rawPreview: summarizeRouterResponse(result),
+        prompt: promptForParse,
+        rawPreview: summarizeRouterResponse(result.raw),
     };
 }
 
