@@ -30,6 +30,8 @@ const MEMORY_GRAPH_CANVAS_WIDTH = 760;
 const MEMORY_GRAPH_CANVAS_HEIGHT = 340;
 const MEMORY_GRAPH_NODE_WIDTH = 172;
 const MEMORY_GRAPH_NODE_HEIGHT = 82;
+const MEMORY_GRAPH_SAFE_PADDING = 12;
+const MEMORY_GRAPH_TOP_SAFE_PADDING = 56;
 const MEMORY_NODE_TYPE_OPTIONS = [
     { value: 'event', label: '事件' },
     { value: 'character', label: '角色' },
@@ -3575,16 +3577,25 @@ function renderMemoryGraphSvg(graph) {
     const positions = new Map();
     nodes.forEach((node, index) => {
         if (Number.isFinite(Number(node.x)) && Number.isFinite(Number(node.y))) {
+            const clamped = clampMemoryNodePosition(Number(node.x), Number(node.y), width, height);
+            node.x = clamped.x;
+            node.y = clamped.y;
             positions.set(node.id, {
-                x: Number(node.x),
-                y: Number(node.y),
+                x: node.x,
+                y: node.y,
             });
             return;
         }
 
         const angle = (Math.PI * 2 * index / nodes.length) - Math.PI / 2;
-        node.x = centerX + Math.cos(angle) * radius - (MEMORY_GRAPH_NODE_WIDTH / 2);
-        node.y = centerY + Math.sin(angle) * radius - (MEMORY_GRAPH_NODE_HEIGHT / 2);
+        const clamped = clampMemoryNodePosition(
+            centerX + Math.cos(angle) * radius - (MEMORY_GRAPH_NODE_WIDTH / 2),
+            centerY + Math.sin(angle) * radius - (MEMORY_GRAPH_NODE_HEIGHT / 2),
+            width,
+            height,
+        );
+        node.x = clamped.x;
+        node.y = clamped.y;
         positions.set(node.id, {
             x: node.x,
             y: node.y,
@@ -3670,6 +3681,19 @@ function parseMemoryNodeTransform(transform) {
 function getOptionLabel(options, value, fallback = '') {
     const normalizedValue = String(value || '');
     return options.find(option => option.value === normalizedValue)?.label || fallback || normalizedValue;
+}
+
+function clampMemoryNodePosition(x, y, canvasWidth = MEMORY_GRAPH_CANVAS_WIDTH, canvasHeight = MEMORY_GRAPH_CANVAS_HEIGHT) {
+    return {
+        x: Math.min(
+            canvasWidth - MEMORY_GRAPH_NODE_WIDTH - MEMORY_GRAPH_SAFE_PADDING,
+            Math.max(MEMORY_GRAPH_SAFE_PADDING, Number(x || 0)),
+        ),
+        y: Math.min(
+            canvasHeight - MEMORY_GRAPH_NODE_HEIGHT - MEMORY_GRAPH_SAFE_PADDING,
+            Math.max(MEMORY_GRAPH_TOP_SAFE_PADDING, Number(y || 0)),
+        ),
+    };
 }
 
 function getMemoryNodeRect(position) {
@@ -3943,8 +3967,9 @@ function bindMemoryGraphSvgInteractions() {
         if (!node) {
             return;
         }
-        node.x = memoryGraphDrag.nodeX + dx;
-        node.y = memoryGraphDrag.nodeY + dy;
+        const clamped = clampMemoryNodePosition(memoryGraphDrag.nodeX + dx, memoryGraphDrag.nodeY + dy);
+        node.x = clamped.x;
+        node.y = clamped.y;
         const group = container.find(`.ai-wbr-memory-node[data-memory-node-id="${escapeCssSelector(memoryGraphDrag.nodeId)}"]`);
         group.attr('transform', `translate(${node.x},${node.y})`);
         graph.links.forEach((link) => {
@@ -3979,8 +4004,9 @@ function bindMemoryGraphSvgInteractions() {
             const point = getMemoryGraphSvgPoint(svg, event.clientX, event.clientY);
             const dx = point.x - drag.startX;
             const dy = point.y - drag.startY;
-            node.x = drag.nodeX + dx;
-            node.y = drag.nodeY + dy;
+            const clamped = clampMemoryNodePosition(drag.nodeX + dx, drag.nodeY + dy);
+            node.x = clamped.x;
+            node.y = clamped.y;
             node.updatedAt = new Date().toISOString();
         }
         graph.updatedAt = new Date().toISOString();
