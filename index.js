@@ -1157,7 +1157,8 @@ function hashString(value) {
 }
 
 function getCurrentChatMemoryKey(context = getContext()) {
-    const directCandidates = [
+    const stableChatParts = [];
+    const stableChatCandidates = [
         context?.chatId,
         context?.chat_id,
         context?.conversationId,
@@ -1165,26 +1166,63 @@ function getCurrentChatMemoryKey(context = getContext()) {
         context?.chatMetadata?.chat_id,
         context?.chatMetadata?.session_id,
         context?.chatMetadata?.file_name,
+        context?.chatMetadata?.main_chat,
+        context?.chatMetadata?.mainChat,
+    ];
+    for (const candidate of stableChatCandidates) {
+        const value = String(candidate ?? '').trim();
+        if (value && !stableChatParts.includes(value)) {
+            stableChatParts.push(value);
+        }
+    }
+
+    const scopeParts = [];
+    const scopeCandidates = [
+        context?.groupId,
+        context?.group_id,
+        context?.characterId,
+        context?.character_id,
+    ];
+    for (const candidate of scopeCandidates) {
+        const value = String(candidate ?? '').trim();
+        if (value && !scopeParts.includes(value)) {
+            scopeParts.push(value);
+        }
+    }
+
+    const charaFile = String(getCharaFilename?.() || '').trim();
+    if (charaFile && !scopeParts.includes(charaFile)) {
+        scopeParts.push(charaFile);
+    }
+
+    if (stableChatParts.length || scopeParts.length) {
+        return `chat:${[...scopeParts, ...stableChatParts].join('|')}`;
+    }
+
+    const weakNameCandidates = [
         context?.chatMetadata?.chat_name,
         context?.chatMetadata?.name,
     ];
-
-    for (const candidate of directCandidates) {
+    const weakParts = [];
+    for (const candidate of weakNameCandidates) {
         const value = String(candidate ?? '').trim();
-        if (value) {
-            return `chat:${value}`;
+        if (value && !weakParts.includes(value)) {
+            weakParts.push(value);
         }
+    }
+    if (weakParts.length) {
+        return `chat:weak:${[...scopeParts, ...weakParts].join('|')}`;
     }
 
     const chat = Array.isArray(context?.chat) ? context.chat : [];
     if (chat.length) {
         const fingerprint = chat
-            .slice(0, 2)
-            .concat(chat.slice(-2))
-            .map(item => `${item?.name || ''}:${item?.mes || item?.text || ''}`)
+            .slice(0, 3)
+            .concat(chat.slice(-3))
+            .map(item => `${item?.is_user ? 'u' : 'a'}:${item?.name || ''}:${item?.mes || item?.text || ''}`)
             .join('\n');
         if (fingerprint.trim()) {
-            return `chat:fallback:${hashString(fingerprint)}`;
+            return `chat:fallback:${hashString(`${scopeParts.join('|')}|${chat.length}|${fingerprint}`)}`;
         }
     }
 
