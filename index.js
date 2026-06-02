@@ -26,6 +26,28 @@ const MAX_BURST_ITEMS = 5;
 const MAX_MEMORY_CONTEXT_PREVIEW = 260;
 const MAX_MEMORY_SELECTED = 4;
 const CHAT_MEMORY_FIELD = 'AIWBR_ChatMemory';
+const MEMORY_NODE_TYPE_OPTIONS = [
+    { value: 'event', label: '事件' },
+    { value: 'character', label: '角色' },
+    { value: 'location', label: '地点' },
+    { value: 'faction', label: '势力' },
+    { value: 'item', label: '道具' },
+    { value: 'concept', label: '概念' },
+    { value: 'rule', label: '规则' },
+    { value: 'quest', label: '任务' },
+];
+const MEMORY_LINK_TYPE_OPTIONS = [
+    { value: 'INVOLVES', label: '涉及' },
+    { value: 'PART_OF', label: '属于' },
+    { value: 'HAPPENS_AT', label: '发生于' },
+    { value: 'FOLLOWS', label: '后续于' },
+    { value: 'UPDATES', label: '更新' },
+    { value: 'OPPOSES', label: '对立' },
+    { value: 'ALLIED_WITH', label: '同盟' },
+    { value: 'CAUSES', label: '导致' },
+    { value: 'RELATED', label: '相关' },
+    { value: 'MENTIONS', label: '提及' },
+];
 const MEMORY_LINK_TYPES = new Set([
     'INVOLVES', 'PART_OF', 'HAPPENS_AT', 'FOLLOWS', 'UPDATES', 'OPPOSES',
     'ALLIED_WITH', 'CAUSES', 'RELATED', 'MENTIONS',
@@ -3627,6 +3649,56 @@ function parseMemoryNodeTransform(transform) {
     };
 }
 
+function buildSelectOptionsHtml(options, currentValue) {
+    const normalizedValue = String(currentValue || '');
+    const known = options.some(option => option.value === normalizedValue);
+    const optionHtml = options.map(option => `<option value="${escapeHtml(option.value)}" ${option.value === normalizedValue ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('');
+    if (!known && normalizedValue) {
+        return `${optionHtml}<option value="${escapeHtml(normalizedValue)}" selected>自定义（${escapeHtml(normalizedValue)}）</option>`;
+    }
+    return optionHtml;
+}
+
+function buildNodeTypeSelect(fieldName, currentValue, extraAttributes = '') {
+    return `<select class="text_pole" ${extraAttributes} data-${fieldName}="type">${buildSelectOptionsHtml(MEMORY_NODE_TYPE_OPTIONS, currentValue || 'event')}</select>`;
+}
+
+function buildLinkTypeSelect(fieldName, currentValue, extraAttributes = '') {
+    return `<select class="text_pole" ${extraAttributes} data-${fieldName}="type">${buildSelectOptionsHtml(MEMORY_LINK_TYPE_OPTIONS, currentValue || 'RELATED')}</select>`;
+}
+
+function createNodeTypeSelect(fieldAttrName, currentValue, extraData = {}) {
+    const select = $('<select class="text_pole"></select>').attr(fieldAttrName, 'type');
+    for (const option of MEMORY_NODE_TYPE_OPTIONS) {
+        select.append($('<option></option>').attr('value', option.value).text(option.label));
+    }
+    const normalizedValue = String(currentValue || 'event');
+    if (!MEMORY_NODE_TYPE_OPTIONS.some(option => option.value === normalizedValue) && normalizedValue) {
+        select.append($('<option></option>').attr('value', normalizedValue).text(`自定义（${normalizedValue}）`));
+    }
+    select.val(normalizedValue);
+    for (const [key, value] of Object.entries(extraData)) {
+        select.attr(key, value);
+    }
+    return select;
+}
+
+function createLinkTypeSelect(fieldAttrName, currentValue, extraData = {}) {
+    const select = $('<select class="text_pole"></select>').attr(fieldAttrName, 'type');
+    for (const option of MEMORY_LINK_TYPE_OPTIONS) {
+        select.append($('<option></option>').attr('value', option.value).text(option.label));
+    }
+    const normalizedValue = String(currentValue || 'RELATED');
+    if (!MEMORY_LINK_TYPE_OPTIONS.some(option => option.value === normalizedValue) && normalizedValue) {
+        select.append($('<option></option>').attr('value', normalizedValue).text(`自定义（${normalizedValue}）`));
+    }
+    select.val(normalizedValue);
+    for (const [key, value] of Object.entries(extraData)) {
+        select.attr(key, value);
+    }
+    return select;
+}
+
 function showMemoryNodePopover(nodeId, clientX, clientY) {
     memoryGraphSelectedNodeId = String(nodeId || '');
     renderMemoryPanel();
@@ -3651,7 +3723,7 @@ function showMemoryNodePopover(nodeId, clientX, clientY) {
         .html(`
             <div class="ai-wbr-memory-popover-title">${escapeHtml(truncateText(node.title || node.id, 38))}</div>
             <label>标题<input class="text_pole" type="text" data-popover-node-field="title" value="${escapeHtml(node.title || '')}" /></label>
-            <label>类型<input class="text_pole" type="text" data-popover-node-field="type" value="${escapeHtml(node.type || 'event')}" /></label>
+            <label>类型${buildNodeTypeSelect('popover-node-field', node.type || 'event')}</label>
             <label>内容<textarea class="text_pole" rows="2" data-popover-node-field="content">${escapeHtml(node.content || '')}</textarea></label>
             <div class="ai-wbr-memory-popover-actions">
                 <button class="menu_button ai-wbr-memory-popover-save" type="button">保存</button>
@@ -4005,7 +4077,7 @@ function renderMemoryPanel() {
                     ))
                     .append($('<td></td>').append(
                         $('<div class="ai-wbr-memory-event-actions"></div>')
-                            .append($('<input class="text_pole ai-wbr-memory-type" type="text" data-memory-node-field="type" />').val(node.type || 'event'))
+                            .append(createNodeTypeSelect('data-memory-node-field', node.type || 'event'))
                             .append($('<button class="menu_button ai-wbr-memory-delete-node" type="button">删除</button>')),
                     )),
             );
@@ -4029,7 +4101,7 @@ function renderMemoryPanel() {
                         $('<input class="text_pole" type="text" data-memory-node-field="title" />').val(node.title || ''),
                     ))
                     .append($('<td></td>').append(
-                        $('<input class="text_pole ai-wbr-memory-type" type="text" data-memory-node-field="type" />').val(node.type || 'character'),
+                        createNodeTypeSelect('data-memory-node-field', node.type || 'character'),
                     ))
                     .append($('<td></td>').append(
                         $('<textarea class="text_pole ai-wbr-memory-content" rows="3" data-memory-node-field="content"></textarea>').val(node.content || ''),
@@ -4061,7 +4133,7 @@ function renderMemoryPanel() {
                 .toggleClass('ai-wbr-memory-link-card-selected', String(link.id) === String(memoryGraphSelectedLinkId))
                 .append($('<div class="ai-wbr-memory-link-title"></div>').text(`${source} → ${target}`))
                 .append($('<div class="ai-wbr-memory-link-grid"></div>')
-                    .append($('<input class="text_pole" type="text" data-memory-link-field="type" />').val(link.type || 'RELATED'))
+                    .append(createLinkTypeSelect('data-memory-link-field', link.type || 'RELATED'))
                     .append($('<input class="text_pole" type="number" min="0" max="1" step="0.05" data-memory-link-field="weight" />').val(link.weight ?? 0.7))
                     .append($('<button class="menu_button ai-wbr-memory-delete-link" type="button">删除</button>')))
                 .append($('<input class="text_pole" type="text" data-memory-link-field="description" placeholder="关系描述" />').val(link.description || '')),
@@ -4100,7 +4172,7 @@ function renderMemoryNodeEditor(graph) {
                     .append(
                         $('<label class="ai-wbr-memory-node-editor-field"></label>')
                             .append('<span>类型</span>')
-                            .append($('<input class="text_pole" type="text" data-memory-editor-field="type" />').val(selectedNode.type || 'event')),
+                            .append(createNodeTypeSelect('data-memory-editor-field', selectedNode.type || 'event')),
                     )
                     .append(
                         $('<label class="ai-wbr-memory-node-editor-field ai-wbr-memory-node-editor-field-wide"></label>')
@@ -4146,12 +4218,12 @@ function renderMemoryEdgeEditor(graph) {
         $('<div class="ai-wbr-memory-node-editor-card"></div>')
             .attr('data-memory-link-id', selectedLink.id)
             .append($('<div class="ai-wbr-memory-node-editor-title"></div>').text(`${sourceTitle} → ${targetTitle}`))
-            .append($('<div class="ai-wbr-memory-node-editor-grid"></div>')
-                .append(
-                    $('<label class="ai-wbr-memory-node-editor-field"></label>')
-                        .append('<span>关系类型</span>')
-                        .append($('<input class="text_pole" type="text" data-memory-edge-field="type" />').val(selectedLink.type || 'RELATED')),
-                )
+                .append($('<div class="ai-wbr-memory-node-editor-grid"></div>')
+                    .append(
+                        $('<label class="ai-wbr-memory-node-editor-field"></label>')
+                            .append('<span>关系类型</span>')
+                            .append(createLinkTypeSelect('data-memory-edge-field', selectedLink.type || 'RELATED')),
+                    )
                 .append(
                     $('<label class="ai-wbr-memory-node-editor-field"></label>')
                         .append('<span>权重</span>')
@@ -4316,7 +4388,7 @@ function bindMemoryPanelActions() {
             renderMemoryGraphSvg(graph);
         })
         .on('click', '.ai-wbr-memory-link-card', function (event) {
-            if ($(event.target).closest('input, textarea, button').length) {
+            if ($(event.target).closest('input, textarea, button, select').length) {
                 return;
             }
             memoryGraphSelectedLinkId = String($(this).data('memoryLinkId') || '');
