@@ -3603,6 +3603,14 @@ function renderMemoryGraphSvg(graph) {
 
     const visibleIds = new Set(nodes.map(node => node.id));
     const edges = graph.links.filter(link => visibleIds.has(link.source) && visibleIds.has(link.target)).slice(-32);
+    const pairBuckets = new Map();
+    edges.forEach((link) => {
+        const pairKey = [String(link.source || ''), String(link.target || '')].sort().join('||');
+        if (!pairBuckets.has(pairKey)) {
+            pairBuckets.set(pairKey, []);
+        }
+        pairBuckets.get(pairKey).push(link);
+    });
     const lines = edges.map(link => {
         const source = positions.get(link.source);
         const target = positions.get(link.target);
@@ -3611,7 +3619,12 @@ function renderMemoryGraphSvg(graph) {
         }
         const opacity = Math.max(0.22, Math.min(0.85, Number(link.weight || 0.5)));
         const selectedClass = String(link.id) === String(memoryGraphSelectedLinkId) ? ' ai-wbr-memory-edge-selected' : '';
-        const path = buildMemoryEdgePath(source, target);
+        const pairKey = [String(link.source || ''), String(link.target || '')].sort().join('||');
+        const siblings = (pairBuckets.get(pairKey) || []).slice().sort((a, b) => String(a.id || '').localeCompare(String(b.id || '')));
+        const siblingIndex = siblings.findIndex(item => String(item.id || '') === String(link.id || ''));
+        const offsetIndex = siblingIndex - ((siblings.length - 1) / 2);
+        const laneOffset = siblings.length > 1 ? offsetIndex * 18 : 0;
+        const path = buildMemoryEdgePath(source, target, laneOffset);
         const linkId = escapeHtml(String(link.id || ''));
         return `
             <path d="${path}" class="ai-wbr-memory-edge-hit" data-memory-link-id="${linkId}" data-source-id="${escapeHtml(link.source)}" data-target-id="${escapeHtml(link.target)}"></path>
@@ -3718,7 +3731,7 @@ function getMemoryNodeRect(position) {
     };
 }
 
-function buildMemoryEdgePath(sourcePosition, targetPosition) {
+function buildMemoryEdgePath(sourcePosition, targetPosition, laneOffset = 0) {
     const sourceRect = getMemoryNodeRect(sourcePosition);
     const targetRect = getMemoryNodeRect(targetPosition);
     const sourceCenter = {
@@ -3750,9 +3763,11 @@ function buildMemoryEdgePath(sourcePosition, targetPosition) {
         endY = targetRect.y + (targetRect.height / 2);
         const curve = Math.max(42, Math.abs(endX - startX) * 0.35);
         control1X = startX + (sourceToRight ? curve : -curve);
-        control1Y = startY;
+        control1Y = startY + laneOffset;
         control2X = endX + (sourceToRight ? -curve : curve);
-        control2Y = endY;
+        control2Y = endY + laneOffset;
+        startY += laneOffset * 0.35;
+        endY += laneOffset * 0.35;
     } else {
         const sourceToBottom = dy >= 0;
         startX = sourceRect.x + (sourceRect.width / 2);
@@ -3760,10 +3775,12 @@ function buildMemoryEdgePath(sourcePosition, targetPosition) {
         endX = targetRect.x + (targetRect.width / 2);
         endY = sourceToBottom ? targetRect.y : targetRect.y + targetRect.height;
         const curve = Math.max(34, Math.abs(endY - startY) * 0.35);
-        control1X = startX;
+        control1X = startX + laneOffset;
         control1Y = startY + (sourceToBottom ? curve : -curve);
-        control2X = endX;
+        control2X = endX + laneOffset;
         control2Y = endY + (sourceToBottom ? -curve : curve);
+        startX += laneOffset * 0.35;
+        endX += laneOffset * 0.35;
     }
 
     return `M ${startX} ${startY} C ${control1X} ${control1Y}, ${control2X} ${control2Y}, ${endX} ${endY}`;
