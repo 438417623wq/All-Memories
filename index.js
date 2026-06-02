@@ -130,6 +130,8 @@ let lastRouteCompletedAt = 0;
 let isMemoryWorkerRunning = false;
 let memoryUpdateTimer = null;
 let chatUiRefreshTimers = [];
+let chatScopedUiPollTimer = null;
+let lastObservedChatScopedUiSignature = '';
 let memoryGraphView = { x: 0, y: 0, width: 620, height: 300 };
 let memoryGraphDrag = null;
 let memoryGraphPan = null;
@@ -165,16 +167,55 @@ function clearChatUiRefreshTimers() {
     chatUiRefreshTimers = [];
 }
 
+function getChatScopedUiSignature(context = getContext()) {
+    const chat = Array.isArray(context?.chat) ? context.chat : [];
+    const first = chat[0];
+    const memoryRaw = first && typeof first === 'object' ? first[CHAT_MEMORY_FIELD] : '';
+    const memoryStamp = typeof memoryRaw === 'string'
+        ? memoryRaw.slice(0, 120)
+        : JSON.stringify(memoryRaw || {}).slice(0, 120);
+    return [
+        String(context?.chatId ?? context?.chat_id ?? context?.conversationId ?? context?.sessionId ?? ''),
+        String(context?.chatMetadata?.file_name ?? context?.chatMetadata?.main_chat ?? context?.chatMetadata?.name ?? ''),
+        String(chat.length),
+        memoryStamp,
+    ].join('|');
+}
+
+function safeRenderChatScopedPanels() {
+    if (memoryGraphDrag || memoryGraphPan) {
+        return;
+    }
+    renderDebugPanel();
+    renderMemoryPanel();
+}
+
 function scheduleChatScopedUiRefresh() {
     clearChatUiRefreshTimers();
-    const delays = [0, 40, 140, 360];
+    const delays = [0, 40, 140, 360, 800];
     for (const delay of delays) {
         const timer = setTimeout(() => {
-            renderDebugPanel();
-            renderMemoryPanel();
+            safeRenderChatScopedPanels();
         }, delay);
         chatUiRefreshTimers.push(timer);
     }
+}
+
+function startChatScopedUiPolling() {
+    if (chatScopedUiPollTimer) {
+        clearInterval(chatScopedUiPollTimer);
+    }
+    lastObservedChatScopedUiSignature = getChatScopedUiSignature();
+    chatScopedUiPollTimer = setInterval(() => {
+        if (memoryGraphDrag || memoryGraphPan) {
+            return;
+        }
+        const nextSignature = getChatScopedUiSignature();
+        if (nextSignature !== lastObservedChatScopedUiSignature) {
+            lastObservedChatScopedUiSignature = nextSignature;
+            safeRenderChatScopedPanels();
+        }
+    }, 500);
 }
 
 async function waitForCompatIdle() {
@@ -1297,11 +1338,6 @@ function getChatMemoryContainer(context = getContext()) {
 
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         return normalizeChatMemoryContainer(parsed);
-    }
-
-    const legacyGraph = settings.memoryGraphsByChat?.[getCurrentChatMemoryKey(context)];
-    if (legacyGraph && typeof legacyGraph === 'object') {
-        return normalizeChatMemoryContainer({ graph: legacyGraph });
     }
 
     return normalizeChatMemoryContainer(null);
@@ -3495,6 +3531,7 @@ function bindMemoryGraphSvgInteractions() {
         if (memoryGraphPan) {
             memoryGraphPan = null;
             $(svg).removeClass('ai-wbr-memory-panning');
+            lastObservedChatScopedUiSignature = getChatScopedUiSignature();
             return;
         }
 
@@ -3506,6 +3543,7 @@ function bindMemoryGraphSvgInteractions() {
         const graph = getMemoryGraph();
         graph.updatedAt = new Date().toISOString();
         saveMemoryGraph(graph);
+        lastObservedChatScopedUiSignature = getChatScopedUiSignature();
 
         if (!drag.moved) {
             memoryGraphSelectedNodeId = drag.nodeId;
@@ -4402,6 +4440,7 @@ jQuery(async () => {
         installCompatSendHooks();
         ensureTavernHelperCompatHook();
         startCompatGenerateHookPolling();
+        startChatScopedUiPolling();
 
         eventSource.on(event_types.GENERATION_STARTED, () => {
             isGenerationActive = true;
