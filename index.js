@@ -3379,12 +3379,16 @@ function buildInjection(selectedEntries, memoryGraph = null, selectedMemories = 
 }
 
 function renderDebugPanel() {
+    const candidates = Array.isArray(lastRun?.candidates) ? lastRun.candidates : [];
+    const selected = Array.isArray(lastRun?.selected) ? lastRun.selected : [];
+    const memoryCandidates = Array.isArray(lastRun?.memoryCandidates) ? lastRun.memoryCandidates : [];
+    const selectedMemories = Array.isArray(lastRun?.selectedMemories) ? lastRun.selectedMemories : [];
     const summary = lastRun.error
         ? `失败：${lastRun.error}`
-        : `世界书候选 ${lastRun.candidates.length} 条，选择 ${lastRun.selected.length} 条；记忆候选 ${lastRun.memoryCandidates.length} 条，选择 ${lastRun.selectedMemories.length} 条；注入 ${lastRun.injectedChars} 字符，来源：${lastRun.source}`;
+        : `世界书候选 ${candidates.length} 条，选择 ${selected.length} 条；记忆候选 ${memoryCandidates.length} 条，选择 ${selectedMemories.length} 条；注入 ${lastRun.injectedChars} 字符，来源：${lastRun.source}`;
     $('#ai_wbr_last_summary').text(summary);
 
-    const worldbookItems = lastRun.selected.map(entry => {
+    const worldbookItems = selected.map(entry => {
         const title = entry.comment || entry.keys?.primary?.[0] || entry.uid;
         const keys = entry.matchedKeys?.length ? ` | keys: ${entry.matchedKeys.join(', ')}` : '';
         return $('<div class="ai-wbr-last-item"></div>')
@@ -3392,7 +3396,7 @@ function renderDebugPanel() {
             .append($('<small></small>').text(`${entry.reason || ''}${keys}`));
     });
 
-    const memoryItems = lastRun.selectedMemories.map(entry => {
+    const memoryItems = selectedMemories.map(entry => {
         const title = entry.comment || entry.uid;
         const keys = entry.matchedKeys?.length ? ` | keys: ${entry.matchedKeys.join(', ')}` : '';
         return $('<div class="ai-wbr-last-item"></div>')
@@ -4643,6 +4647,8 @@ jQuery(async () => {
             lastRun = {
                 candidates: [],
                 selected: [],
+                memoryCandidates: [],
+                selectedMemories: [],
                 injectedChars: 0,
                 injectionText: '',
                 source: 'none',
