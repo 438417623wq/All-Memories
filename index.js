@@ -73,6 +73,12 @@ const defaultSettings = {
     memoryRequestMaxTokens: 10000,
     memoryMaxNodes: 60,
     memoryMaxLinks: 120,
+    memoryGraphsByChat: {},
+    memoryStatusesByChat: {},
+    memoryLastTurnSignaturesByChat: {},
+    memoryLastPromptsByChat: {},
+    memoryLastRawByChat: {},
+    memoryLastErrorsByChat: {},
     memoryGraph: null,
     memoryLastTurnSignature: '',
     memoryStatus: '未启用',
@@ -333,6 +339,12 @@ function ensureSettings() {
     }
 
     Object.assign(settings, defaultSettings, extension_settings[MODULE_NAME]);
+    settings.memoryGraphsByChat = settings.memoryGraphsByChat && typeof settings.memoryGraphsByChat === 'object' ? settings.memoryGraphsByChat : {};
+    settings.memoryStatusesByChat = settings.memoryStatusesByChat && typeof settings.memoryStatusesByChat === 'object' ? settings.memoryStatusesByChat : {};
+    settings.memoryLastTurnSignaturesByChat = settings.memoryLastTurnSignaturesByChat && typeof settings.memoryLastTurnSignaturesByChat === 'object' ? settings.memoryLastTurnSignaturesByChat : {};
+    settings.memoryLastPromptsByChat = settings.memoryLastPromptsByChat && typeof settings.memoryLastPromptsByChat === 'object' ? settings.memoryLastPromptsByChat : {};
+    settings.memoryLastRawByChat = settings.memoryLastRawByChat && typeof settings.memoryLastRawByChat === 'object' ? settings.memoryLastRawByChat : {};
+    settings.memoryLastErrorsByChat = settings.memoryLastErrorsByChat && typeof settings.memoryLastErrorsByChat === 'object' ? settings.memoryLastErrorsByChat : {};
     if (!settings.memoryGraph || typeof settings.memoryGraph !== 'object') {
         settings.memoryGraph = getDefaultMemoryGraph();
     }
@@ -1077,12 +1089,126 @@ function getDefaultMemoryGraph() {
     };
 }
 
-function getMemoryGraph() {
-    if (!settings.memoryGraph || typeof settings.memoryGraph !== 'object') {
-        settings.memoryGraph = getDefaultMemoryGraph();
+function hashString(value) {
+    let hash = 0;
+    const text = String(value || '');
+    for (let i = 0; i < text.length; i += 1) {
+        hash = ((hash << 5) - hash) + text.charCodeAt(i);
+        hash |= 0;
+    }
+    return Math.abs(hash).toString(36);
+}
+
+function getCurrentChatMemoryKey(context = getContext()) {
+    const directCandidates = [
+        context?.chatId,
+        context?.chat_id,
+        context?.conversationId,
+        context?.sessionId,
+        context?.chatMetadata?.chat_id,
+        context?.chatMetadata?.session_id,
+        context?.chatMetadata?.file_name,
+        context?.chatMetadata?.chat_name,
+        context?.chatMetadata?.name,
+    ];
+
+    for (const candidate of directCandidates) {
+        const value = String(candidate ?? '').trim();
+        if (value) {
+            return `chat:${value}`;
+        }
     }
 
-    const graph = settings.memoryGraph;
+    const chat = Array.isArray(context?.chat) ? context.chat : [];
+    if (chat.length) {
+        const fingerprint = chat
+            .slice(0, 2)
+            .concat(chat.slice(-2))
+            .map(item => `${item?.name || ''}:${item?.mes || item?.text || ''}`)
+            .join('\n');
+        if (fingerprint.trim()) {
+            return `chat:fallback:${hashString(fingerprint)}`;
+        }
+    }
+
+    return 'chat:default';
+}
+
+function cloneMemoryGraph(graph) {
+    try {
+        return JSON.parse(JSON.stringify(graph || getDefaultMemoryGraph()));
+    } catch {
+        return getDefaultMemoryGraph();
+    }
+}
+
+function getPerChatMemoryValue(storeName, fallbackValue, context = getContext()) {
+    const store = settings[storeName] && typeof settings[storeName] === 'object' ? settings[storeName] : {};
+    settings[storeName] = store;
+    const key = getCurrentChatMemoryKey(context);
+    return Object.hasOwn(store, key) ? store[key] : fallbackValue;
+}
+
+function setPerChatMemoryValue(storeName, value, context = getContext()) {
+    const store = settings[storeName] && typeof settings[storeName] === 'object' ? settings[storeName] : {};
+    settings[storeName] = store;
+    store[getCurrentChatMemoryKey(context)] = value;
+    Object.assign(extension_settings[MODULE_NAME], settings);
+    saveSettingsDebounced();
+}
+
+function getCurrentMemoryStatus(context = getContext()) {
+    return String(getPerChatMemoryValue('memoryStatusesByChat', settings.memoryStatus || '', context) || '');
+}
+
+function setCurrentMemoryStatus(text, context = getContext()) {
+    setPerChatMemoryValue('memoryStatusesByChat', String(text || ''), context);
+}
+
+function getCurrentMemoryLastTurnSignature(context = getContext()) {
+    return String(getPerChatMemoryValue('memoryLastTurnSignaturesByChat', settings.memoryLastTurnSignature || '', context) || '');
+}
+
+function setCurrentMemoryLastTurnSignature(value, context = getContext()) {
+    setPerChatMemoryValue('memoryLastTurnSignaturesByChat', String(value || ''), context);
+}
+
+function getCurrentMemoryLastPrompt(context = getContext()) {
+    return String(getPerChatMemoryValue('memoryLastPromptsByChat', settings.memoryLastPrompt || '', context) || '');
+}
+
+function setCurrentMemoryLastPrompt(value, context = getContext()) {
+    setPerChatMemoryValue('memoryLastPromptsByChat', String(value || ''), context);
+}
+
+function getCurrentMemoryLastRaw(context = getContext()) {
+    return String(getPerChatMemoryValue('memoryLastRawByChat', settings.memoryLastRaw || '', context) || '');
+}
+
+function setCurrentMemoryLastRaw(value, context = getContext()) {
+    setPerChatMemoryValue('memoryLastRawByChat', String(value || ''), context);
+}
+
+function getCurrentMemoryLastError(context = getContext()) {
+    return String(getPerChatMemoryValue('memoryLastErrorsByChat', settings.memoryLastError || '', context) || '');
+}
+
+function setCurrentMemoryLastError(value, context = getContext()) {
+    setPerChatMemoryValue('memoryLastErrorsByChat', String(value || ''), context);
+}
+
+function getMemoryGraph(context = getContext()) {
+    const chatKey = getCurrentChatMemoryKey(context);
+    settings.memoryGraphsByChat = settings.memoryGraphsByChat && typeof settings.memoryGraphsByChat === 'object' ? settings.memoryGraphsByChat : {};
+
+    if (!settings.memoryGraphsByChat[chatKey] || typeof settings.memoryGraphsByChat[chatKey] !== 'object') {
+        const legacyGraph = settings.memoryGraph && typeof settings.memoryGraph === 'object'
+            ? cloneMemoryGraph(settings.memoryGraph)
+            : getDefaultMemoryGraph();
+        settings.memoryGraphsByChat[chatKey] = legacyGraph;
+    }
+
+    const graph = settings.memoryGraphsByChat[chatKey];
     graph.version = Number(graph.version || 1);
     graph.state = {
         ...getDefaultMemoryGraph().state,
@@ -1097,18 +1223,20 @@ function getMemoryGraph() {
     return graph;
 }
 
-function saveMemoryGraph(graph = getMemoryGraph()) {
+function saveMemoryGraph(graph = getMemoryGraph(), context = getContext()) {
+    const chatKey = getCurrentChatMemoryKey(context);
+    settings.memoryGraphsByChat = settings.memoryGraphsByChat && typeof settings.memoryGraphsByChat === 'object' ? settings.memoryGraphsByChat : {};
+    settings.memoryGraphsByChat[chatKey] = graph;
     settings.memoryGraph = graph;
     Object.assign(extension_settings[MODULE_NAME], settings);
     saveSettingsDebounced();
     renderMemoryPanel();
 }
 
-function setMemoryStatus(text) {
+function setMemoryStatus(text, context = getContext()) {
     settings.memoryStatus = String(text || '');
-    $('#ai_wbr_memory_status').text(settings.memoryStatus);
-    Object.assign(extension_settings[MODULE_NAME], settings);
-    saveSettingsDebounced();
+    setCurrentMemoryStatus(text, context);
+    $('#ai_wbr_memory_status').text(getCurrentMemoryStatus(context));
 }
 
 function createMemoryId(title, fallback = 'memory') {
@@ -1698,7 +1826,7 @@ async function runMemoryGraphUpdate(reason = 'auto') {
     }
 
     const signature = getMemoryTurnSignature(recentMessages);
-    if (reason === 'auto' && signature && signature === settings.memoryLastTurnSignature) {
+    if (reason === 'auto' && signature && signature === getCurrentMemoryLastTurnSignature(context)) {
         return false;
     }
 
@@ -1709,11 +1837,9 @@ async function runMemoryGraphUpdate(reason = 'auto') {
     try {
         const graph = getMemoryGraph();
         const prompt = buildMemoryExtractionPrompt(recentMessages, graph);
-        settings.memoryLastPrompt = prompt;
-        settings.memoryLastRaw = '';
-        settings.memoryLastError = '';
-        Object.assign(extension_settings[MODULE_NAME], settings);
-        saveSettingsDebounced();
+        setCurrentMemoryLastPrompt(prompt, context);
+        setCurrentMemoryLastRaw('', context);
+        setCurrentMemoryLastError('', context);
         const memorySystemPrompt = '你是后置轻量记忆变量块输出器。禁止解释，禁止 reasoning，禁止 Markdown，禁止 JSON 对象；只输出指定变量块。';
         let raw;
         try {
@@ -1737,9 +1863,7 @@ async function runMemoryGraphUpdate(reason = 'auto') {
 
         if (hasEmptyVisibleContentDueToLength(raw)) {
             const retryPrompt = buildMemoryExtractionRetryPrompt(recentMessages, graph);
-            settings.memoryLastPrompt = `${prompt}\n\n----- RETRY PROMPT -----\n\n${retryPrompt}`;
-            Object.assign(extension_settings[MODULE_NAME], settings);
-            saveSettingsDebounced();
+            setCurrentMemoryLastPrompt(`${prompt}\n\n----- RETRY PROMPT -----\n\n${retryPrompt}`, context);
             try {
                 isRouterSelectionRequest = true;
                 if (settings.routerUseSeparateModel && settings.routerApiUrl && settings.routerApiKey && settings.routerModel) {
@@ -1759,15 +1883,11 @@ async function runMemoryGraphUpdate(reason = 'auto') {
                 isRouterSelectionRequest = false;
             }
         }
-        settings.memoryLastRaw = summarizeRouterResponse(raw);
-        settings.memoryLastError = '';
-        Object.assign(extension_settings[MODULE_NAME], settings);
-        saveSettingsDebounced();
+        setCurrentMemoryLastRaw(summarizeRouterResponse(raw), context);
+        setCurrentMemoryLastError('', context);
         const update = parseMemoryUpdate(raw, prompt);
         applyMemoryGraphUpdate(update);
-        settings.memoryLastTurnSignature = signature;
-        Object.assign(extension_settings[MODULE_NAME], settings);
-        saveSettingsDebounced();
+        setCurrentMemoryLastTurnSignature(signature, context);
         const nodeCount = getMemoryGraph().nodes.length;
         const linkCount = getMemoryGraph().links.length;
         setMemoryStatus(`已更新：${nodeCount} 节点 / ${linkCount} 关系`);
@@ -1776,15 +1896,13 @@ async function runMemoryGraphUpdate(reason = 'auto') {
         return true;
     } catch (error) {
         console.warn(`${LOG_PREFIX} Memory graph update failed`, error);
-        settings.memoryLastError = error?.message || String(error);
-        if (error?.routerRaw && !settings.memoryLastRaw) {
-            settings.memoryLastRaw = error.routerRaw;
+        setCurrentMemoryLastError(error?.message || String(error), context);
+        if (error?.routerRaw && !getCurrentMemoryLastRaw(context)) {
+            setCurrentMemoryLastRaw(error.routerRaw, context);
         }
-        if (error?.routerPrompt && !settings.memoryLastPrompt) {
-            settings.memoryLastPrompt = error.routerPrompt;
+        if (error?.routerPrompt && !getCurrentMemoryLastPrompt(context)) {
+            setCurrentMemoryLastPrompt(error.routerPrompt, context);
         }
-        Object.assign(extension_settings[MODULE_NAME], settings);
-        saveSettingsDebounced();
         setMemoryStatus(`记忆失败：${truncateText(error?.message || error, 80)}`);
         playStatusBurst('×', 'fail');
         stopMemoryAnimation(false);
@@ -2964,9 +3082,7 @@ function bindMemoryGraphSvgInteractions() {
         memoryGraphDrag = null;
         const graph = getMemoryGraph();
         graph.updatedAt = new Date().toISOString();
-        settings.memoryGraph = graph;
-        Object.assign(extension_settings[MODULE_NAME], settings);
-        saveSettingsDebounced();
+        saveMemoryGraph(graph);
 
         if (!drag.moved) {
             showMemoryNodePopover(drag.nodeId, event.clientX, event.clientY);
@@ -3042,12 +3158,12 @@ function renderMemoryPanel() {
     }
 
     const graph = getMemoryGraph();
-    $('#ai_wbr_memory_status').text(settings.memoryStatus || (settings.memoryEnabled ? '待整理' : '未启用'));
+    $('#ai_wbr_memory_status').text(getCurrentMemoryStatus() || (settings.memoryEnabled ? '待整理' : '未启用'));
     $('#ai_wbr_memory_json').val(JSON.stringify(graph, null, 2));
     $('#ai_wbr_memory_debug_panel').toggle(!!settings.memoryDebug);
-    $('#ai_wbr_memory_prompt').text(settings.memoryLastPrompt || '尚无后置记忆 Prompt');
-    $('#ai_wbr_memory_raw').text(settings.memoryLastRaw || '尚无后置记忆返回');
-    $('#ai_wbr_memory_error').text(settings.memoryLastError || '尚无错误');
+    $('#ai_wbr_memory_prompt').text(getCurrentMemoryLastPrompt() || '尚无后置记忆 Prompt');
+    $('#ai_wbr_memory_raw').text(getCurrentMemoryLastRaw() || '尚无后置记忆返回');
+    $('#ai_wbr_memory_error').text(getCurrentMemoryLastError() || '尚无错误');
     renderMemoryGraphSvg(graph);
 
     const state = graph.state || {};
@@ -3121,11 +3237,11 @@ function bindMemoryPanelActions() {
         event.preventDefault();
         try {
             const parsed = JSON.parse(String($('#ai_wbr_memory_json').val() || '{}'));
-            settings.memoryGraph = {
+            const nextGraph = {
                 ...getDefaultMemoryGraph(),
                 ...parsed,
             };
-            saveMemoryGraph(getMemoryGraph());
+            saveMemoryGraph(nextGraph);
             toastr.success('记忆 JSON 已保存', '世界书读取');
         } catch (error) {
             toastr.error(`JSON 解析失败：${error.message || error}`, '世界书读取');
@@ -3137,9 +3253,11 @@ function bindMemoryPanelActions() {
         if (!confirm('确定清空当前轻量记忆图谱？')) {
             return;
         }
-        settings.memoryGraph = getDefaultMemoryGraph();
-        settings.memoryLastTurnSignature = '';
-        saveMemoryGraph(settings.memoryGraph);
+        saveMemoryGraph(getDefaultMemoryGraph());
+        setCurrentMemoryLastTurnSignature('');
+        setCurrentMemoryLastPrompt('');
+        setCurrentMemoryLastRaw('');
+        setCurrentMemoryLastError('');
         setMemoryStatus('已清空');
     });
 
@@ -3157,9 +3275,7 @@ function bindMemoryPanelActions() {
                 graph.state[field] = value;
             }
             graph.updatedAt = new Date().toISOString();
-            settings.memoryGraph = graph;
-            Object.assign(extension_settings[MODULE_NAME], settings);
-            saveSettingsDebounced();
+            saveMemoryGraph(graph);
             $('#ai_wbr_memory_json').val(JSON.stringify(graph, null, 2));
             renderMemoryGraphSvg(graph);
         })
@@ -3179,9 +3295,7 @@ function bindMemoryPanelActions() {
             }
             node.updatedAt = new Date().toISOString();
             graph.updatedAt = node.updatedAt;
-            settings.memoryGraph = graph;
-            Object.assign(extension_settings[MODULE_NAME], settings);
-            saveSettingsDebounced();
+            saveMemoryGraph(graph);
             $('#ai_wbr_memory_json').val(JSON.stringify(graph, null, 2));
             renderMemoryGraphSvg(graph);
         })
@@ -3200,9 +3314,7 @@ function bindMemoryPanelActions() {
             }
             link.updatedAt = new Date().toISOString();
             graph.updatedAt = link.updatedAt;
-            settings.memoryGraph = graph;
-            Object.assign(extension_settings[MODULE_NAME], settings);
-            saveSettingsDebounced();
+            saveMemoryGraph(graph);
             $('#ai_wbr_memory_json').val(JSON.stringify(graph, null, 2));
             renderMemoryGraphSvg(graph);
         })
