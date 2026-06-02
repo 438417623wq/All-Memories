@@ -1297,10 +1297,11 @@ function getMemoryGraph(context = getContext()) {
     settings.memoryGraphsByChat = settings.memoryGraphsByChat && typeof settings.memoryGraphsByChat === 'object' ? settings.memoryGraphsByChat : {};
 
     if (!settings.memoryGraphsByChat[chatKey] || typeof settings.memoryGraphsByChat[chatKey] !== 'object') {
-        const legacyGraph = settings.memoryGraph && typeof settings.memoryGraph === 'object'
+        const hasPerChatGraphs = Object.keys(settings.memoryGraphsByChat).length > 0;
+        const shouldMigrateLegacyGraph = !hasPerChatGraphs && settings.memoryGraph && typeof settings.memoryGraph === 'object';
+        settings.memoryGraphsByChat[chatKey] = shouldMigrateLegacyGraph
             ? cloneMemoryGraph(settings.memoryGraph)
             : getDefaultMemoryGraph();
-        settings.memoryGraphsByChat[chatKey] = legacyGraph;
     }
 
     const graph = settings.memoryGraphsByChat[chatKey];
@@ -4328,6 +4329,8 @@ jQuery(async () => {
             stopWorldInfoAnimation();
             $('#ai_wbr_memory_node_popover').hide();
             clearTimeout(memoryUpdateTimer);
+            memoryGraphSelectedNodeId = '';
+            memoryGraphLinkSourceId = '';
             pendingCompatSend = false;
             suppressCompatReplay = false;
             lastRun = {
