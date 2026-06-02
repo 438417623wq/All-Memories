@@ -71,6 +71,7 @@ const defaultSettings = {
     memoryAutoRun: true,
     memoryInjectToRouter: true,
     memoryDebug: false,
+    memoryScopeDebug: false,
     memoryScanMessages: 6,
     memoryRequestMaxTokens: 10000,
     memoryRetries: 3,
@@ -188,7 +189,80 @@ function getChatScopedUiSignature(context = getContext()) {
     ].join('|');
 }
 
+function getMemoryGraphSummary(graph) {
+    const safeGraph = graph && typeof graph === 'object' ? graph : getDefaultMemoryGraph();
+    const state = safeGraph.state || {};
+    return {
+        location: state.current_location || '',
+        time: state.current_time || '',
+        objective: state.current_objective || '',
+        nodes: Array.isArray(safeGraph.nodes) ? safeGraph.nodes.length : 0,
+        links: Array.isArray(safeGraph.links) ? safeGraph.links.length : 0,
+        nodeTitles: (Array.isArray(safeGraph.nodes) ? safeGraph.nodes : []).slice(0, 8).map(node => `${node.type || 'memory'}:${node.title || node.id}`),
+        updatedAt: safeGraph.updatedAt || '',
+    };
+}
+
+function getMemoryScopeDebugSnapshot(context = getContext()) {
+    const chat = Array.isArray(context?.chat) ? context.chat : [];
+    const first = getChatMemoryFirstMessage(context);
+    const raw = first && typeof first === 'object' ? first[CHAT_MEMORY_FIELD] : undefined;
+    const parsed = typeof raw === 'string'
+        ? (() => {
+            try {
+                return JSON.parse(raw);
+            } catch {
+                return null;
+            }
+        })()
+        : raw;
+    return {
+        signature: getChatScopedUiSignature(context),
+        chatLength: chat.length,
+        firstMessageName: first?.name || '',
+        hasFirstMessage: !!first,
+        hasChatMemoryField: raw !== undefined,
+        rawType: raw === undefined ? 'undefined' : typeof raw,
+        rawPreview: typeof raw === 'string' ? raw.slice(0, 180) : JSON.stringify(raw || null).slice(0, 180),
+        parsedGraph: getMemoryGraphSummary(parsed?.graph || null),
+        contextIds: {
+            charaFile: String(getCharaFilename?.() || ''),
+            characterId: context?.characterId ?? context?.character_id ?? '',
+            groupId: context?.groupId ?? context?.group_id ?? '',
+            chatId: context?.chatId ?? context?.chat_id ?? '',
+            conversationId: context?.conversationId ?? '',
+            sessionId: context?.sessionId ?? '',
+            metadataFile: context?.chatMetadata?.file_name ?? context?.chatMetadata?.main_chat ?? context?.chatMetadata?.name ?? '',
+        },
+    };
+}
+
+function memoryScopeDebugLog(action, details = {}, context = getContext()) {
+    if (!settings.memoryScopeDebug) {
+        return;
+    }
+    try {
+        console.groupCollapsed(`${LOG_PREFIX} [MemoryScope] ${action}`);
+        console.debug('snapshot:', getMemoryScopeDebugSnapshot(context));
+        if (details && Object.keys(details).length) {
+            console.debug('details:', details);
+        }
+        console.groupEnd();
+    } catch (error) {
+        console.warn(`${LOG_PREFIX} [MemoryScope] debug log failed`, error);
+    }
+}
+
+if (typeof window !== 'undefined') {
+    window.aiWbrMemoryDebugDump = () => {
+        const snapshot = getMemoryScopeDebugSnapshot();
+        console.debug(`${LOG_PREFIX} [MemoryScope] manual dump`, snapshot);
+        return snapshot;
+    };
+}
+
 function clearMemoryUiForScopeSwitch() {
+    memoryScopeDebugLog('clearMemoryUiForScopeSwitch');
     $('#ai_wbr_memory_node_popover').hide();
     $('#ai_wbr_memory_graph').html('<div class="ai-wbr-token-empty">正在切换聊天记忆...</div>');
     $('#ai_wbr_memory_node_editor').empty().append('<div class="ai-wbr-token-empty">点击上方图谱节点后，这里会显示该节点的可编辑信息。</div>');
@@ -199,8 +273,10 @@ function clearMemoryUiForScopeSwitch() {
 
 function safeRenderChatScopedPanels() {
     if (memoryGraphDrag || memoryGraphPan) {
+        memoryScopeDebugLog('safeRenderChatScopedPanels skipped while dragging/panning');
         return;
     }
+    memoryScopeDebugLog('safeRenderChatScopedPanels before render');
     renderDebugPanel();
     renderMemoryPanel();
 }
@@ -208,6 +284,7 @@ function safeRenderChatScopedPanels() {
 function scheduleChatScopedUiRefresh() {
     clearChatUiRefreshTimers();
     const delays = [0, 40, 140, 360, 800];
+    memoryScopeDebugLog('scheduleChatScopedUiRefresh', { delays });
     for (const delay of delays) {
         const timer = setTimeout(() => {
             safeRenderChatScopedPanels();
@@ -227,6 +304,10 @@ function startChatScopedUiPolling() {
         }
         const nextSignature = getChatScopedUiSignature();
         if (nextSignature !== lastObservedChatScopedUiSignature) {
+            memoryScopeDebugLog('poll signature changed', {
+                previous: lastObservedChatScopedUiSignature,
+                next: nextSignature,
+            });
             lastObservedChatScopedUiSignature = nextSignature;
             safeRenderChatScopedPanels();
         }
@@ -234,6 +315,7 @@ function startChatScopedUiPolling() {
 }
 
 function handleChatScopedUiMaybeChanged() {
+    memoryScopeDebugLog('handleChatScopedUiMaybeChanged');
     clearEntryBurst();
     stopWorldInfoAnimation();
     clearTimeout(memoryUpdateTimer);
@@ -254,7 +336,19 @@ function installChatScopedUiRefreshEventHooks() {
         }
         hookedValues.add(value);
         try {
-            eventSource.on(value, handleChatScopedUiMaybeChanged);
+            eventSource.on(value, (...args) => {
+                memoryScopeDebugLog(`event ${key}`, {
+                    eventValue: value,
+                    argsPreview: args.slice(0, 2).map(arg => {
+                        try {
+                            return JSON.stringify(arg).slice(0, 240);
+                        } catch {
+                            return String(arg);
+                        }
+                    }),
+                });
+                handleChatScopedUiMaybeChanged();
+            });
         } catch {
             // no-op: some event names may not be hookable on older builds
         }
@@ -1365,6 +1459,7 @@ function normalizeChatMemoryContainer(container) {
 function getChatMemoryContainer(context = getContext()) {
     const first = getChatMemoryFirstMessage(context);
     if (!first) {
+        memoryScopeDebugLog('getChatMemoryContainer no first message', {}, context);
         return normalizeChatMemoryContainer(null);
     }
 
@@ -1380,19 +1475,33 @@ function getChatMemoryContainer(context = getContext()) {
         : raw;
 
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return normalizeChatMemoryContainer(parsed);
+        const normalized = normalizeChatMemoryContainer(parsed);
+        memoryScopeDebugLog('getChatMemoryContainer from chat[0]', {
+            rawType: typeof raw,
+            graph: getMemoryGraphSummary(normalized.graph),
+        }, context);
+        return normalized;
     }
 
+    memoryScopeDebugLog('getChatMemoryContainer empty/default', {
+        rawType: raw === undefined ? 'undefined' : typeof raw,
+        rawPreview: typeof raw === 'string' ? raw.slice(0, 180) : JSON.stringify(raw || null).slice(0, 180),
+    }, context);
     return normalizeChatMemoryContainer(null);
 }
 
 function persistChatMemoryContainer(container, context = getContext()) {
     const first = getChatMemoryFirstMessage(context);
     if (!first) {
+        memoryScopeDebugLog('persistChatMemoryContainer skipped no first message', {}, context);
         return;
     }
 
     first[CHAT_MEMORY_FIELD] = normalizeChatMemoryContainer(container);
+    memoryScopeDebugLog('persistChatMemoryContainer wrote chat[0]', {
+        graph: getMemoryGraphSummary(first[CHAT_MEMORY_FIELD]?.graph),
+        hasSaveChat: typeof context?.saveChat === 'function',
+    }, context);
     if (typeof context?.saveChat === 'function') {
         Promise.resolve(context.saveChat()).catch((error) => {
             console.warn(`${LOG_PREFIX} Failed to save chat memory container`, error);
@@ -3686,6 +3795,11 @@ function renderMemoryPanel() {
     }
 
     const graph = getMemoryGraph();
+    memoryScopeDebugLog('renderMemoryPanel', {
+        graph: getMemoryGraphSummary(graph),
+        selectedNodeId: memoryGraphSelectedNodeId,
+        linkSourceId: memoryGraphLinkSourceId,
+    });
     $('#ai_wbr_memory_status').text(getCurrentMemoryStatus() || (settings.memoryEnabled ? '待整理' : '未启用'));
     $('#ai_wbr_memory_json').val(JSON.stringify(graph, null, 2));
     $('#ai_wbr_memory_debug_panel').toggle(!!settings.memoryDebug);
@@ -3874,6 +3988,7 @@ function bindMemoryPanelActions() {
     bindCheckbox('#ai_wbr_memory_auto_run', 'memoryAutoRun');
     bindCheckbox('#ai_wbr_memory_inject_to_router', 'memoryInjectToRouter');
     bindCheckbox('#ai_wbr_memory_debug', 'memoryDebug');
+    bindCheckbox('#ai_wbr_memory_scope_debug', 'memoryScopeDebug');
     bindNumber('#ai_wbr_memory_scan_messages', 'memoryScanMessages', 2, 40);
     bindNumber('#ai_wbr_memory_retries', 'memoryRetries', 0, 10);
     bindNumber('#ai_wbr_memory_max_nodes', 'memoryMaxNodes', 5, 200);
