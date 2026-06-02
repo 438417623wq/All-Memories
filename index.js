@@ -131,6 +131,7 @@ let memoryGraphView = { x: 0, y: 0, width: 620, height: 300 };
 let memoryGraphDrag = null;
 let memoryGraphPan = null;
 let memoryGraphLinkSourceId = '';
+let memoryGraphSelectedNodeId = '';
 
 function beginRouterBusy() {
     if (routerBusyPromise) {
@@ -2904,9 +2905,19 @@ function buildMemoryCandidates(graph) {
     });
 }
 
+function isMemoryEventType(type) {
+    return ['event', 'quest'].includes(String(type || '').toLowerCase());
+}
+
 function getMemoryEventNodes(graph) {
     return (Array.isArray(graph?.nodes) ? graph.nodes : [])
-        .filter(node => ['event', 'quest'].includes(String(node.type || '').toLowerCase()))
+        .filter(node => isMemoryEventType(node.type))
+        .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+}
+
+function getMemoryNonEventNodes(graph) {
+    return (Array.isArray(graph?.nodes) ? graph.nodes : [])
+        .filter(node => !isMemoryEventType(node.type))
         .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
 }
 
@@ -3156,6 +3167,9 @@ function updateMemoryGraphViewBox(svg) {
 }
 
 function showMemoryNodePopover(nodeId, clientX, clientY) {
+    memoryGraphSelectedNodeId = String(nodeId || '');
+    renderMemoryPanel();
+
     const graph = getMemoryGraph();
     const node = graph.nodes.find(item => item.id === nodeId);
     let popover = $('#ai_wbr_memory_node_popover');
@@ -3339,13 +3353,15 @@ function bindMemoryGraphSvgInteractions() {
         saveMemoryGraph(graph);
 
         if (!drag.moved) {
-            showMemoryNodePopover(drag.nodeId, event.clientX, event.clientY);
+            memoryGraphSelectedNodeId = drag.nodeId;
+            renderMemoryPanel();
+            $('#ai_wbr_memory_node_popover').hide();
         } else {
             $('#ai_wbr_memory_json').val(JSON.stringify(graph, null, 2));
         }
     });
 
-    container.on('click.memoryGraphSvg', '.ai-wbr-memory-popover-save', function () {
+    $(document).on('click.memoryGraphSvg', '#ai_wbr_memory_node_popover .ai-wbr-memory-popover-save', function () {
         const graph = getMemoryGraph();
         const popover = $('#ai_wbr_memory_node_popover');
         const node = graph.nodes.find(item => item.id === String(popover.data('memoryNodeId')));
@@ -3361,13 +3377,13 @@ function bindMemoryGraphSvgInteractions() {
         popover.hide();
     });
 
-    container.on('click.memoryGraphSvg', '.ai-wbr-memory-set-link-source', function () {
+    $(document).on('click.memoryGraphSvg', '#ai_wbr_memory_node_popover .ai-wbr-memory-set-link-source', function () {
         const nodeId = String($('#ai_wbr_memory_node_popover').data('memoryNodeId'));
         memoryGraphLinkSourceId = nodeId;
         renderMemoryGraphSvg(getMemoryGraph());
     });
 
-    container.on('click.memoryGraphSvg', '.ai-wbr-memory-link-to-source', function () {
+    $(document).on('click.memoryGraphSvg', '#ai_wbr_memory_node_popover .ai-wbr-memory-link-to-source', function () {
         const graph = getMemoryGraph();
         const targetId = String($('#ai_wbr_memory_node_popover').data('memoryNodeId'));
         if (!memoryGraphLinkSourceId || memoryGraphLinkSourceId === targetId) {
@@ -3389,7 +3405,7 @@ function bindMemoryGraphSvgInteractions() {
         $('#ai_wbr_memory_node_popover').hide();
     });
 
-    container.on('click.memoryGraphSvg', '.ai-wbr-memory-popover-delete', function () {
+    $(document).on('click.memoryGraphSvg', '#ai_wbr_memory_node_popover .ai-wbr-memory-popover-delete', function () {
         const graph = getMemoryGraph();
         const nodeId = String($('#ai_wbr_memory_node_popover').data('memoryNodeId'));
         graph.nodes = graph.nodes.filter(node => node.id !== nodeId);
@@ -3419,6 +3435,7 @@ function renderMemoryPanel() {
     $('#ai_wbr_memory_raw').text(getCurrentMemoryLastRaw() || '尚无后置记忆返回');
     $('#ai_wbr_memory_error').text(getCurrentMemoryLastError() || '尚无错误');
     renderMemoryGraphSvg(graph);
+    renderMemoryNodeEditor(graph);
 
     const stateRows = getMemoryStateRows(graph);
     const stateTable = $('<table class="ai-wbr-memory-table"></table>');
@@ -3442,6 +3459,7 @@ function renderMemoryPanel() {
     );
 
     const eventNodes = getMemoryEventNodes(graph);
+    const nonEventNodes = getMemoryNonEventNodes(graph);
     const nodesContainer = $('#ai_wbr_memory_nodes').empty();
     nodesContainer.append($('<div class="ai-wbr-memory-subtitle"><b>事件表（剧情推进会新增）</b></div>'));
     if (!eventNodes.length) {
@@ -3482,6 +3500,39 @@ function renderMemoryPanel() {
         nodesContainer.append($('<div class="ai-wbr-memory-table-wrap"></div>').append(eventTable));
     }
 
+    nodesContainer.append($('<div class="ai-wbr-memory-subtitle m-t-1"><b>非事件节点（角色 / 地点 / 概念等）</b></div>'));
+    if (!nonEventNodes.length) {
+        nodesContainer.append('<div class="ai-wbr-token-empty">暂无非事件节点</div>');
+    } else {
+        const nonEventTable = $('<table class="ai-wbr-memory-table ai-wbr-memory-entity-table"></table>');
+        nonEventTable.append('<thead><tr><th>标题</th><th>类型</th><th>说明</th><th>关键词 / 标签</th><th>操作</th></tr></thead>');
+        const nonEventBody = $('<tbody></tbody>');
+        for (const node of nonEventNodes) {
+            nonEventBody.append(
+                $('<tr></tr>')
+                    .attr('data-memory-node-id', node.id)
+                    .append($('<td></td>').append(
+                        $('<input class="text_pole" type="text" data-memory-node-field="title" />').val(node.title || ''),
+                    ))
+                    .append($('<td></td>').append(
+                        $('<input class="text_pole ai-wbr-memory-type" type="text" data-memory-node-field="type" />').val(node.type || 'character'),
+                    ))
+                    .append($('<td></td>').append(
+                        $('<textarea class="text_pole ai-wbr-memory-content" rows="3" data-memory-node-field="content"></textarea>').val(node.content || ''),
+                    ))
+                    .append($('<td></td>').append(
+                        $('<input class="text_pole" type="text" data-memory-node-field="keys" placeholder="关键词，用逗号分隔" />').val((node.keys || []).join('，')),
+                        $('<input class="text_pole m-t-05" type="text" data-memory-node-field="tags" placeholder="标签，用逗号分隔" />').val((node.tags || []).join('，')),
+                    ))
+                    .append($('<td></td>').append(
+                        $('<button class="menu_button ai-wbr-memory-delete-node" type="button">删除</button>'),
+                    )),
+            );
+        }
+        nonEventTable.append(nonEventBody);
+        nodesContainer.append($('<div class="ai-wbr-memory-table-wrap"></div>').append(nonEventTable));
+    }
+
     const linksContainer = $('#ai_wbr_memory_links').empty();
     linksContainer.append($('<div class="ai-wbr-memory-subtitle"><b>关系边</b></div>'));
     if (!graph.links.length) {
@@ -3501,6 +3552,63 @@ function renderMemoryPanel() {
                 .append($('<input class="text_pole" type="text" data-memory-link-field="description" placeholder="关系描述" />').val(link.description || '')),
         );
     }
+}
+
+function renderMemoryNodeEditor(graph) {
+    const editor = $('#ai_wbr_memory_node_editor').empty();
+    const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+    const selectedNode = nodes.find(node => node.id === memoryGraphSelectedNodeId) || null;
+    const sourceTitle = memoryGraphLinkSourceId
+        ? nodes.find(item => item.id === memoryGraphLinkSourceId)?.title || memoryGraphLinkSourceId
+        : '';
+
+    editor.append('<div class="ai-wbr-memory-subtitle"><b>节点编辑器</b></div>');
+
+    if (!selectedNode) {
+        editor.append('<div class="ai-wbr-token-empty">点击上方图谱节点后，这里会显示该节点的可编辑信息。</div>');
+        return;
+    }
+
+    editor
+        .attr('data-memory-node-id', selectedNode.id)
+        .append(
+            $('<div class="ai-wbr-memory-node-editor-card"></div>')
+                .append($('<div class="ai-wbr-memory-node-editor-title"></div>').text(selectedNode.title || selectedNode.id))
+                .append($('<div class="ai-wbr-memory-node-editor-grid"></div>')
+                    .append(
+                        $('<label class="ai-wbr-memory-node-editor-field"></label>')
+                            .append('<span>标题</span>')
+                            .append($('<input class="text_pole" type="text" data-memory-editor-field="title" />').val(selectedNode.title || '')),
+                    )
+                    .append(
+                        $('<label class="ai-wbr-memory-node-editor-field"></label>')
+                            .append('<span>类型</span>')
+                            .append($('<input class="text_pole" type="text" data-memory-editor-field="type" />').val(selectedNode.type || 'event')),
+                    )
+                    .append(
+                        $('<label class="ai-wbr-memory-node-editor-field ai-wbr-memory-node-editor-field-wide"></label>')
+                            .append('<span>内容</span>')
+                            .append($('<textarea class="text_pole" rows="4" data-memory-editor-field="content"></textarea>').val(selectedNode.content || '')),
+                    )
+                    .append(
+                        $('<label class="ai-wbr-memory-node-editor-field"></label>')
+                            .append('<span>关键词</span>')
+                            .append($('<input class="text_pole" type="text" data-memory-editor-field="keys" placeholder="用逗号分隔" />').val((selectedNode.keys || []).join('，'))),
+                    )
+                    .append(
+                        $('<label class="ai-wbr-memory-node-editor-field"></label>')
+                            .append('<span>标签</span>')
+                            .append($('<input class="text_pole" type="text" data-memory-editor-field="tags" placeholder="用逗号分隔" />').val((selectedNode.tags || []).join('，'))),
+                    ),
+                )
+                .append(
+                    $('<div class="ai-wbr-memory-popover-actions"></div>')
+                        .append('<button class="menu_button ai-wbr-memory-editor-save" type="button">保存</button>')
+                        .append('<button class="menu_button ai-wbr-memory-editor-set-link-source" type="button">设为起点</button>')
+                        .append($(`<button class="menu_button ai-wbr-memory-editor-link-to-source" type="button" ${memoryGraphLinkSourceId && memoryGraphLinkSourceId !== selectedNode.id ? '' : 'disabled'}>连接到起点${sourceTitle ? `：${escapeHtml(truncateText(sourceTitle, 10))}` : ''}</button>`))
+                        .append('<button class="menu_button ai-wbr-memory-editor-delete" type="button">删除</button>'),
+                ),
+        );
 }
 
 function bindMemoryPanelActions() {
@@ -3606,11 +3714,89 @@ function bindMemoryPanelActions() {
             $('#ai_wbr_memory_json').val(JSON.stringify(graph, null, 2));
             renderMemoryGraphSvg(graph);
         })
+        .on('input change', '[data-memory-editor-field]', function () {
+            const graph = getMemoryGraph();
+            const node = graph.nodes.find(item => item.id === memoryGraphSelectedNodeId);
+            if (!node) {
+                return;
+            }
+            const field = String($(this).data('memoryEditorField'));
+            const value = String($(this).val() || '');
+            if (field === 'tags') {
+                node.tags = uniqueStrings(value.split(/[,\n，、]+/u));
+            } else if (field === 'keys') {
+                node.keys = uniqueStrings(value.split(/[,\n，、]+/u));
+            } else {
+                node[field] = value;
+            }
+            node.updatedAt = new Date().toISOString();
+            graph.updatedAt = node.updatedAt;
+            saveMemoryGraph(graph);
+        })
+        .on('click', '.ai-wbr-memory-editor-save', function () {
+            const graph = getMemoryGraph();
+            const node = graph.nodes.find(item => item.id === memoryGraphSelectedNodeId);
+            if (!node) {
+                return;
+            }
+            node.updatedAt = new Date().toISOString();
+            graph.updatedAt = node.updatedAt;
+            saveMemoryGraph(graph);
+            toastr.success('节点已保存', '世界书读取');
+        })
+        .on('click', '.ai-wbr-memory-editor-set-link-source', function () {
+            if (!memoryGraphSelectedNodeId) {
+                return;
+            }
+            memoryGraphLinkSourceId = memoryGraphSelectedNodeId;
+            renderMemoryPanel();
+        })
+        .on('click', '.ai-wbr-memory-editor-link-to-source', function () {
+            const graph = getMemoryGraph();
+            const targetId = memoryGraphSelectedNodeId;
+            if (!memoryGraphLinkSourceId || !targetId || memoryGraphLinkSourceId === targetId) {
+                return;
+            }
+            const link = normalizeMemoryLink({
+                source: memoryGraphLinkSourceId,
+                target: targetId,
+                type: 'RELATED',
+                weight: 0.7,
+                description: '手动创建的记忆关系',
+            }, new Set(graph.nodes.map(node => node.id)), graph.links.length);
+            if (link && !graph.links.some(item => item.source === link.source && item.target === link.target && item.type === link.type)) {
+                graph.links.push(link);
+                graph.updatedAt = new Date().toISOString();
+                saveMemoryGraph(graph);
+            }
+            memoryGraphLinkSourceId = '';
+            renderMemoryPanel();
+        })
+        .on('click', '.ai-wbr-memory-editor-delete', function () {
+            const graph = getMemoryGraph();
+            const id = memoryGraphSelectedNodeId;
+            if (!id) {
+                return;
+            }
+            graph.nodes = graph.nodes.filter(node => node.id !== id);
+            graph.links = graph.links.filter(link => link.source !== id && link.target !== id);
+            if (memoryGraphLinkSourceId === id) {
+                memoryGraphLinkSourceId = '';
+            }
+            memoryGraphSelectedNodeId = '';
+            saveMemoryGraph(graph);
+        })
         .on('click', '.ai-wbr-memory-delete-node', function () {
             const graph = getMemoryGraph();
             const id = String($(this).closest('[data-memory-node-id]').data('memoryNodeId'));
             graph.nodes = graph.nodes.filter(node => node.id !== id);
             graph.links = graph.links.filter(link => link.source !== id && link.target !== id);
+            if (memoryGraphSelectedNodeId === id) {
+                memoryGraphSelectedNodeId = '';
+            }
+            if (memoryGraphLinkSourceId === id) {
+                memoryGraphLinkSourceId = '';
+            }
             saveMemoryGraph(graph);
         })
         .on('click', '.ai-wbr-memory-delete-link', function () {
