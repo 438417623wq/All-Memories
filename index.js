@@ -1340,7 +1340,9 @@ function getDefaultMemoryGraph() {
             current_phase: '',
             active_topics: [],
             open_questions: [],
+            custom_values: {},
         },
+        stateDefinitions: [],
         nodes: [],
         links: [],
         lastSummary: '',
@@ -1439,6 +1441,25 @@ function cloneMemoryGraph(graph) {
     }
 }
 
+function normalizeMemoryStateDefinition(definition, index = 0) {
+    const rawLabel = String(definition?.label || definition?.name || '').trim();
+    const rawInstruction = String(definition?.instruction || definition?.desc || definition?.description || '').trim();
+    const label = truncateText(rawLabel || `自定义字段${index + 1}`, 40);
+    const keyBase = String(definition?.key || createMemoryId(rawLabel || rawInstruction || `custom_state_${index + 1}`, 'custom_state')).trim();
+    const key = keyBase.startsWith('custom_') ? keyBase : `custom_${keyBase}`;
+    return {
+        key,
+        label,
+        instruction: truncateText(rawInstruction, 140),
+    };
+}
+
+function getCustomMemoryStateDefinitions(graph) {
+    return (Array.isArray(graph?.stateDefinitions) ? graph.stateDefinitions : [])
+        .map((definition, index) => normalizeMemoryStateDefinition(definition, index))
+        .filter((definition, index, array) => definition.label && array.findIndex(item => item.key === definition.key) === index);
+}
+
 function getChatMemoryFirstMessage(context = getContext()) {
     const chat = Array.isArray(context?.chat) ? context.chat : [];
     const first = chat[0];
@@ -1451,6 +1472,14 @@ function normalizeChatMemoryContainer(container) {
         : {};
     normalized.version = Number(normalized.version || 1);
     normalized.graph = cloneMemoryGraph(normalized.graph || getDefaultMemoryGraph());
+    normalized.graph.stateDefinitions = getCustomMemoryStateDefinitions(normalized.graph);
+    normalized.graph.state = {
+        ...getDefaultMemoryGraph().state,
+        ...(normalized.graph.state && typeof normalized.graph.state === 'object' ? normalized.graph.state : {}),
+    };
+    normalized.graph.state.custom_values = normalized.graph.state.custom_values && typeof normalized.graph.state.custom_values === 'object'
+        ? { ...normalized.graph.state.custom_values }
+        : {};
     normalized.status = String(normalized.status || '');
     normalized.lastTurnSignature = String(normalized.lastTurnSignature || '');
     normalized.lastPrompt = String(normalized.lastPrompt || '');
@@ -1593,8 +1622,12 @@ function getMemoryGraph(context = getContext()) {
         ...getDefaultMemoryGraph().state,
         ...(graph.state && typeof graph.state === 'object' ? graph.state : {}),
     };
+    graph.state.custom_values = graph.state.custom_values && typeof graph.state.custom_values === 'object'
+        ? { ...graph.state.custom_values }
+        : {};
     graph.state.active_topics = uniqueStrings(Array.isArray(graph.state.active_topics) ? graph.state.active_topics : []);
     graph.state.open_questions = uniqueStrings(Array.isArray(graph.state.open_questions) ? graph.state.open_questions : []);
+    graph.stateDefinitions = getCustomMemoryStateDefinitions(graph);
     graph.nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
     graph.links = Array.isArray(graph.links) ? graph.links : [];
     graph.lastSummary = String(graph.lastSummary || '');
@@ -1729,6 +1762,13 @@ function buildMemoryRouterSummary() {
             return `- ${source} ${link.type || 'RELATED'} ${target}${link.description ? `：${truncateText(link.description, 90)}` : ''}`;
         })
         .join('\n');
+    const customStateLines = getCustomMemoryStateDefinitions(graph)
+        .map(definition => {
+            const value = String(state.custom_values?.[definition.key] || '').trim();
+            return value ? `${definition.label}：${value}` : '';
+        })
+        .filter(Boolean)
+        .join('\n');
 
     const parts = [
         '[轻量记忆状态]',
@@ -1736,6 +1776,7 @@ function buildMemoryRouterSummary() {
         state.current_objective ? `当前目标：${state.current_objective}` : '',
         state.active_topics?.length ? `活跃主题：${state.active_topics.join('、')}` : '',
         state.open_questions?.length ? `未解问题：${state.open_questions.join('、')}` : '',
+        customStateLines,
         graph.lastSummary ? `最近摘要：${truncateText(graph.lastSummary, 420)}` : '',
         topNodes ? `关键记忆节点：\n${topNodes}` : '',
         topLinks ? `关键关系：\n${topLinks}` : '',
@@ -1775,6 +1816,7 @@ function buildMemoryExtractionPrompt(recentMessages, graph) {
         .join('\n\n');
     const currentGraph = truncateText(JSON.stringify({
         state: graph.state,
+        stateDefinitions: getCustomMemoryStateDefinitions(graph),
         nodes: graph.nodes.slice(-8).map(node => ({
             id: node.id,
             title: node.title,
@@ -1786,6 +1828,10 @@ function buildMemoryExtractionPrompt(recentMessages, graph) {
             type: link.type,
         })),
     }, null, 2), 4200);
+    const customDefinitions = getCustomMemoryStateDefinitions(graph);
+    const customDefinitionLines = customDefinitions.length
+        ? customDefinitions.map(definition => `- ${definition.label} (${definition.key})：${definition.instruction || '自定义状态字段'}`).join('\n')
+        : '- 无';
 
     return `<role>你是 SillyTavern 的后置轻量记忆变量块输出器。</role>
 
@@ -1805,6 +1851,10 @@ function buildMemoryExtractionPrompt(recentMessages, graph) {
 8. 已有同义节点优先写入 memory_updates_json，不要重复造节点。
 </rules>
 
+<custom_state_definitions>
+${customDefinitionLines}
+</custom_state_definitions>
+
 <example>
 输入剧情：角色逃跑，被导师用魔法拦住。
 正确输出：
@@ -1816,6 +1866,7 @@ memory_state_current_objective_json="脱身"
 memory_state_current_phase_json="冲突升级"
 memory_active_topics_json=["逃跑","拦截","导师"]
 memory_open_questions_json=["导师会如何处置主角？"]
+memory_custom_state_json={}
 memory_nodes_json=[{"id":"event_escape_blocked","title":"逃跑被导师拦住","type":"event","content":"主角试图逃跑，被导师用魔法阻断去路。","tags":["冲突"],"importance":0.8,"credibility":0.9}]
 memory_updates_json=[]
 memory_links_json=[]
@@ -1843,6 +1894,7 @@ memory_state_current_objective_json=""
 memory_state_current_phase_json=""
 memory_active_topics_json=[]
 memory_open_questions_json=[]
+memory_custom_state_json={}
 memory_nodes_json=[]
 memory_updates_json=[]
 memory_links_json=[]
@@ -1856,12 +1908,13 @@ memory_summary_json=""
 1. 上面所有行必须全部输出，顺序不要变。
 2. 每行等号右边必须是合法 JSON 值；字符串用 "...", 数组用 [...]。
 3. 如果没有内容，字符串填 ""，数组填 []。
-4. memory_nodes_json 节点格式：
+4. memory_custom_state_json 必须是 JSON 对象；key 只能来自 <custom_state_definitions> 中给出的 key，value 为字符串。
+5. memory_nodes_json 节点格式：
 {"id":"稳定英文或拼音id","title":"简短标题","type":"event|character|location|faction|item|concept|rule|quest","content":"已确认事实","tags":["标签"],"importance":0.6,"credibility":0.8}
-5. memory_links_json 关系格式：
+6. memory_links_json 关系格式：
 {"source":"源节点id或标题","target":"目标节点id或标题","type":"INVOLVES|PART_OF|HAPPENS_AT|FOLLOWS|UPDATES|OPPOSES|ALLIED_WITH|CAUSES|RELATED","weight":0.7,"description":"关系证据"}
-6. memory_summary_json 必须概括“为什么值得写入”；只有确实没有长期价值时才允许是 ""。
-7. 不要输出任何额外字段。
+7. memory_summary_json 必须概括“为什么值得写入”；只有确实没有长期价值时才允许是 ""。
+8. 不要输出任何额外字段。
 </field_rules>`;
 }
 
@@ -1873,12 +1926,18 @@ function buildMemoryExtractionRetryPrompt(recentMessages, graph) {
 
     const compactState = JSON.stringify({
         state: graph.state || {},
+        stateDefinitions: getCustomMemoryStateDefinitions(graph),
         node_titles: (graph.nodes || []).slice(-8).map(node => ({ id: node.id, title: node.title, type: node.type })),
     }, null, 2);
+    const customDefinitions = getCustomMemoryStateDefinitions(graph);
+    const customDefinitionLines = customDefinitions.length
+        ? customDefinitions.map(definition => `- ${definition.label} (${definition.key})：${definition.instruction || '自定义状态字段'}`).join('\n')
+        : '- 无';
 
     return `<role>你是后置轻量记忆整理器。</role>
 <task>根据最近对话，为长期 RP / 剧情状态输出固定变量块。</task>
 <rules>不要思考过程；不要解释；不要空回复；不要 JSON 对象；只输出变量块。</rules>
+<custom_state_definitions>${customDefinitionLines}</custom_state_definitions>
 <current_graph>${compactState}</current_graph>
 <recent_dialogue>${compactContext || '(空)'}</recent_dialogue>
 <rule>如果存在剧情推进、角色互动、地点变化、任务变化、设定变化，memory_nodes_json 必须至少有 1 个节点。</rule>
@@ -1891,6 +1950,7 @@ memory_state_current_objective_json=""
 memory_state_current_phase_json=""
 memory_active_topics_json=[]
 memory_open_questions_json=[]
+memory_custom_state_json={}
 memory_nodes_json=[]
 memory_updates_json=[]
 memory_links_json=[]
@@ -1959,6 +2019,7 @@ function parseMemoryUpdate(rawResponse, prompt = '') {
                 current_phase: readJsonValue('memory_state_current_phase_json', ''),
                 active_topics: readJsonValue('memory_active_topics_json', []),
                 open_questions: readJsonValue('memory_open_questions_json', []),
+                custom_state: readJsonValue('memory_custom_state_json', {}),
             },
             nodes: readJsonValue('memory_nodes_json', []),
             updates: readJsonValue('memory_updates_json', []),
@@ -2077,6 +2138,18 @@ function applyMemoryGraphUpdate(update) {
     }
     if (Array.isArray(state.open_questions)) {
         graph.state.open_questions = uniqueStrings([...state.open_questions]).slice(0, 12);
+    }
+    if (state.custom_state && typeof state.custom_state === 'object' && !Array.isArray(state.custom_state)) {
+        const allowedKeys = new Set(getCustomMemoryStateDefinitions(graph).map(definition => definition.key));
+        graph.state.custom_values = graph.state.custom_values && typeof graph.state.custom_values === 'object'
+            ? graph.state.custom_values
+            : {};
+        for (const [key, rawValue] of Object.entries(state.custom_state)) {
+            if (!allowedKeys.has(key)) {
+                continue;
+            }
+            graph.state.custom_values[key] = truncateText(String(rawValue || '').trim(), 220);
+        }
     }
 
     const removeNodeIds = new Set((Array.isArray(update?.remove_node_ids) ? update.remove_node_ids : []).map(createMemoryId));
@@ -3185,11 +3258,16 @@ function selectWithFallback(candidates) {
 
 function hasMemoryState(graph) {
     const state = graph?.state || {};
+    const customValues = state.custom_values && typeof state.custom_values === 'object' ? state.custom_values : {};
     return !!(
         String(state.current_location || '').trim()
+        || String(state.current_time || '').trim()
+        || String(state.protagonist_status || '').trim()
         || String(state.current_objective || '').trim()
+        || String(state.current_phase || '').trim()
         || (Array.isArray(state.active_topics) && state.active_topics.length)
         || (Array.isArray(state.open_questions) && state.open_questions.length)
+        || Object.values(customValues).some(value => String(value || '').trim())
     );
 }
 
@@ -3269,7 +3347,7 @@ function getMemoryNonEventNodes(graph) {
 
 function getMemoryStateRows(graph) {
     const state = graph?.state || {};
-    return [
+    const rows = [
         { key: 'current_location', label: '当前地点', value: state.current_location || '' },
         { key: 'current_time', label: '当前时间', value: state.current_time || '' },
         { key: 'protagonist_status', label: '主角状态', value: state.protagonist_status || '' },
@@ -3278,6 +3356,17 @@ function getMemoryStateRows(graph) {
         { key: 'active_topics', label: '活跃主题', value: (state.active_topics || []).join('，') },
         { key: 'open_questions', label: '未解问题', value: (state.open_questions || []).join('；') },
     ];
+    const customValues = state.custom_values && typeof state.custom_values === 'object' ? state.custom_values : {};
+    for (const definition of getCustomMemoryStateDefinitions(graph)) {
+        rows.push({
+            key: definition.key,
+            label: definition.label,
+            description: definition.instruction,
+            value: String(customValues[definition.key] || ''),
+            isCustom: true,
+        });
+    }
+    return rows;
 }
 
 function recallMemoryCandidates(graph, recentMessages, mvuSummary) {
@@ -3331,6 +3420,13 @@ function buildMemoryInjection(graph, selectedMemories) {
         for (const question of state.open_questions.slice(0, 6)) {
             parts.push(`- ${question}\n`);
         }
+    }
+    for (const definition of getCustomMemoryStateDefinitions(graph)) {
+        const value = String(state.custom_values?.[definition.key] || '').trim();
+        if (!value) {
+            continue;
+        }
+        parts.push(`${definition.label}：${value}\n`);
     }
 
     if (memoryItems.length) {
@@ -3823,7 +3919,13 @@ function renderMemoryPanel() {
     for (const row of stateRows) {
         stateBody.append(
             $('<tr></tr>')
-                .append($('<th scope="row"></th>').text(row.label))
+                .append($('<th scope="row"></th>')
+                    .append($('<div></div>').text(row.label))
+                    .append(row.description ? $('<div class="ai-wbr-memory-state-desc"></div>').text(row.description) : '')
+                    .append(row.isCustom
+                        ? $('<button class="menu_button ai-wbr-memory-delete-state-definition m-t-05" type="button">删除</button>')
+                            .attr('data-memory-state-definition-key', row.key)
+                        : ''))
                 .append($('<td></td>').append(
                     $('<input class="text_pole" type="text" />')
                         .attr('data-memory-state-field', row.key)
@@ -3833,6 +3935,14 @@ function renderMemoryPanel() {
     }
     stateTable.append(stateBody);
     $('#ai_wbr_memory_state_editor').empty().append(
+        $('<div class="ai-wbr-memory-subtitle"><b>新增自定义状态字段</b></div>'),
+        $(`
+            <div class="ai-wbr-memory-add-state">
+                <input id="ai_wbr_memory_new_state_label" class="text_pole" type="text" placeholder="字段名，例如：道具" />
+                <input id="ai_wbr_memory_new_state_instruction" class="text_pole" type="text" placeholder="字段说明，例如：user背包里的道具" />
+                <button id="ai_wbr_memory_add_state_definition" class="menu_button" type="button">添加字段</button>
+            </div>
+        `),
         $('<div class="ai-wbr-memory-subtitle"><b>状态表（固定更新）</b></div>'),
         $('<div class="ai-wbr-memory-table-wrap"></div>').append(stateTable),
     );
@@ -4044,6 +4154,11 @@ function bindMemoryPanelActions() {
             const value = String($(this).val() || '').trim();
             if (field === 'active_topics' || field === 'open_questions') {
                 graph.state[field] = uniqueStrings(value.split(/[,\n，、]+/u)).slice(0, 12);
+            } else if (field.startsWith('custom_')) {
+                graph.state.custom_values = graph.state.custom_values && typeof graph.state.custom_values === 'object'
+                    ? graph.state.custom_values
+                    : {};
+                graph.state.custom_values[field] = truncateText(value, 220);
             } else {
                 graph.state[field] = value;
             }
@@ -4051,6 +4166,40 @@ function bindMemoryPanelActions() {
             saveMemoryGraph(graph);
             $('#ai_wbr_memory_json').val(JSON.stringify(graph, null, 2));
             renderMemoryGraphSvg(graph);
+        })
+        .on('click', '#ai_wbr_memory_add_state_definition', function () {
+            const graph = getMemoryGraph();
+            const label = String($('#ai_wbr_memory_new_state_label').val() || '').trim();
+            const instruction = String($('#ai_wbr_memory_new_state_instruction').val() || '').trim();
+            if (!label) {
+                toastr.warning('请先填写字段名', '世界书读取');
+                return;
+            }
+            const definition = normalizeMemoryStateDefinition({ label, instruction }, getCustomMemoryStateDefinitions(graph).length);
+            graph.stateDefinitions = getCustomMemoryStateDefinitions(graph);
+            if (graph.stateDefinitions.some(item => item.key === definition.key || item.label === definition.label)) {
+                toastr.warning('已存在同名或同 key 的状态字段', '世界书读取');
+                return;
+            }
+            graph.stateDefinitions.push(definition);
+            graph.state.custom_values = graph.state.custom_values && typeof graph.state.custom_values === 'object'
+                ? graph.state.custom_values
+                : {};
+            graph.state.custom_values[definition.key] = '';
+            graph.updatedAt = new Date().toISOString();
+            saveMemoryGraph(graph);
+            $('#ai_wbr_memory_new_state_label').val('');
+            $('#ai_wbr_memory_new_state_instruction').val('');
+        })
+        .on('click', '.ai-wbr-memory-delete-state-definition', function () {
+            const graph = getMemoryGraph();
+            const key = String($(this).data('memoryStateDefinitionKey') || '');
+            graph.stateDefinitions = getCustomMemoryStateDefinitions(graph).filter(item => item.key !== key);
+            if (graph.state.custom_values && typeof graph.state.custom_values === 'object') {
+                delete graph.state.custom_values[key];
+            }
+            graph.updatedAt = new Date().toISOString();
+            saveMemoryGraph(graph);
         })
         .on('input change', '[data-memory-node-field]', function () {
             const graph = getMemoryGraph();
