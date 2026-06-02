@@ -3577,9 +3577,8 @@ function renderMemoryGraphSvg(graph) {
     const positions = new Map();
     nodes.forEach((node, index) => {
         if (Number.isFinite(Number(node.x)) && Number.isFinite(Number(node.y))) {
-            const clamped = clampMemoryNodePosition(Number(node.x), Number(node.y), width, height);
-            node.x = clamped.x;
-            node.y = clamped.y;
+            node.x = Number(node.x);
+            node.y = Number(node.y);
             positions.set(node.id, {
                 x: node.x,
                 y: node.y,
@@ -3683,7 +3682,7 @@ function getOptionLabel(options, value, fallback = '') {
     return options.find(option => option.value === normalizedValue)?.label || fallback || normalizedValue;
 }
 
-function clampMemoryNodePosition(x, y, canvasWidth = MEMORY_GRAPH_CANVAS_WIDTH, canvasHeight = MEMORY_GRAPH_CANVAS_HEIGHT) {
+function clampMemoryNodePosition(x, y, canvasWidth = MEMORY_GRAPH_CANVAS_WIDTH, canvasHeight = MEMORY_GRAPH_CANVAS_HEIGHT, topPadding = MEMORY_GRAPH_TOP_SAFE_PADDING) {
     return {
         x: Math.min(
             canvasWidth - MEMORY_GRAPH_NODE_WIDTH - MEMORY_GRAPH_SAFE_PADDING,
@@ -3691,8 +3690,20 @@ function clampMemoryNodePosition(x, y, canvasWidth = MEMORY_GRAPH_CANVAS_WIDTH, 
         ),
         y: Math.min(
             canvasHeight - MEMORY_GRAPH_NODE_HEIGHT - MEMORY_GRAPH_SAFE_PADDING,
-            Math.max(MEMORY_GRAPH_TOP_SAFE_PADDING, Number(y || 0)),
+            Math.max(topPadding, Number(y || 0)),
         ),
+    };
+}
+
+function clampMemoryNodePositionToView(x, y, view = memoryGraphView, topPadding = 0) {
+    const safeTop = Math.max(0, Number(topPadding || 0));
+    const minX = Number(view?.x || 0) + MEMORY_GRAPH_SAFE_PADDING;
+    const minY = Number(view?.y || 0) + safeTop + MEMORY_GRAPH_SAFE_PADDING;
+    const maxX = Number(view?.x || 0) + Number(view?.width || MEMORY_GRAPH_CANVAS_WIDTH) - MEMORY_GRAPH_NODE_WIDTH - MEMORY_GRAPH_SAFE_PADDING;
+    const maxY = Number(view?.y || 0) + Number(view?.height || MEMORY_GRAPH_CANVAS_HEIGHT) - MEMORY_GRAPH_NODE_HEIGHT - MEMORY_GRAPH_SAFE_PADDING;
+    return {
+        x: Math.min(maxX, Math.max(minX, Number(x || 0))),
+        y: Math.min(maxY, Math.max(minY, Number(y || 0))),
     };
 }
 
@@ -3967,7 +3978,7 @@ function bindMemoryGraphSvgInteractions() {
         if (!node) {
             return;
         }
-        const clamped = clampMemoryNodePosition(memoryGraphDrag.nodeX + dx, memoryGraphDrag.nodeY + dy);
+        const clamped = clampMemoryNodePositionToView(memoryGraphDrag.nodeX + dx, memoryGraphDrag.nodeY + dy);
         node.x = clamped.x;
         node.y = clamped.y;
         const group = container.find(`.ai-wbr-memory-node[data-memory-node-id="${escapeCssSelector(memoryGraphDrag.nodeId)}"]`);
@@ -4004,7 +4015,7 @@ function bindMemoryGraphSvgInteractions() {
             const point = getMemoryGraphSvgPoint(svg, event.clientX, event.clientY);
             const dx = point.x - drag.startX;
             const dy = point.y - drag.startY;
-            const clamped = clampMemoryNodePosition(drag.nodeX + dx, drag.nodeY + dy);
+            const clamped = clampMemoryNodePositionToView(drag.nodeX + dx, drag.nodeY + dy);
             node.x = clamped.x;
             node.y = clamped.y;
             node.updatedAt = new Date().toISOString();
