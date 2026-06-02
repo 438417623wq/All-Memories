@@ -25,6 +25,7 @@ const MAX_ROUTER_CONTEXT_PREVIEW = 360;
 const MAX_BURST_ITEMS = 5;
 const MAX_MEMORY_CONTEXT_PREVIEW = 260;
 const MAX_MEMORY_SELECTED = 4;
+const CHAT_MEMORY_FIELD = 'AIWBR_ChatMemory';
 const MEMORY_LINK_TYPES = new Set([
     'INVOLVES', 'PART_OF', 'HAPPENS_AT', 'FOLLOWS', 'UPDATES', 'OPPOSES',
     'ALLIED_WITH', 'CAUSES', 'RELATED', 'MENTIONS',
@@ -1237,19 +1238,100 @@ function cloneMemoryGraph(graph) {
     }
 }
 
+function getChatMemoryFirstMessage(context = getContext()) {
+    const chat = Array.isArray(context?.chat) ? context.chat : [];
+    const first = chat[0];
+    return first && typeof first === 'object' ? first : null;
+}
+
+function normalizeChatMemoryContainer(container) {
+    const normalized = container && typeof container === 'object' && !Array.isArray(container)
+        ? { ...container }
+        : {};
+    normalized.version = Number(normalized.version || 1);
+    normalized.graph = cloneMemoryGraph(normalized.graph || getDefaultMemoryGraph());
+    normalized.status = String(normalized.status || '');
+    normalized.lastTurnSignature = String(normalized.lastTurnSignature || '');
+    normalized.lastPrompt = String(normalized.lastPrompt || '');
+    normalized.lastRaw = String(normalized.lastRaw || '');
+    normalized.lastError = String(normalized.lastError || '');
+    return normalized;
+}
+
+function getChatMemoryContainer(context = getContext()) {
+    const first = getChatMemoryFirstMessage(context);
+    if (!first) {
+        return normalizeChatMemoryContainer(null);
+    }
+
+    const raw = first[CHAT_MEMORY_FIELD];
+    const parsed = typeof raw === 'string'
+        ? (() => {
+            try {
+                return JSON.parse(raw);
+            } catch {
+                return null;
+            }
+        })()
+        : raw;
+
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return normalizeChatMemoryContainer(parsed);
+    }
+
+    const legacyGraph = settings.memoryGraphsByChat?.[getCurrentChatMemoryKey(context)];
+    if (legacyGraph && typeof legacyGraph === 'object') {
+        return normalizeChatMemoryContainer({ graph: legacyGraph });
+    }
+
+    return normalizeChatMemoryContainer(null);
+}
+
+function persistChatMemoryContainer(container, context = getContext()) {
+    const first = getChatMemoryFirstMessage(context);
+    if (!first) {
+        return;
+    }
+
+    first[CHAT_MEMORY_FIELD] = normalizeChatMemoryContainer(container);
+    if (typeof context?.saveChat === 'function') {
+        Promise.resolve(context.saveChat()).catch((error) => {
+            console.warn(`${LOG_PREFIX} Failed to save chat memory container`, error);
+        });
+    }
+}
+
 function getPerChatMemoryValue(storeName, fallbackValue, context = getContext()) {
-    const store = settings[storeName] && typeof settings[storeName] === 'object' ? settings[storeName] : {};
-    settings[storeName] = store;
-    const key = getCurrentChatMemoryKey(context);
-    return Object.hasOwn(store, key) ? store[key] : fallbackValue;
+    const container = getChatMemoryContainer(context);
+    const fieldMap = {
+        memoryStatusesByChat: 'status',
+        memoryLastTurnSignaturesByChat: 'lastTurnSignature',
+        memoryLastPromptsByChat: 'lastPrompt',
+        memoryLastRawByChat: 'lastRaw',
+        memoryLastErrorsByChat: 'lastError',
+    };
+    const field = fieldMap[storeName];
+    if (!field) {
+        return fallbackValue;
+    }
+    return container[field] ?? fallbackValue;
 }
 
 function setPerChatMemoryValue(storeName, value, context = getContext()) {
-    const store = settings[storeName] && typeof settings[storeName] === 'object' ? settings[storeName] : {};
-    settings[storeName] = store;
-    store[getCurrentChatMemoryKey(context)] = value;
-    Object.assign(extension_settings[MODULE_NAME], settings);
-    saveSettingsDebounced();
+    const fieldMap = {
+        memoryStatusesByChat: 'status',
+        memoryLastTurnSignaturesByChat: 'lastTurnSignature',
+        memoryLastPromptsByChat: 'lastPrompt',
+        memoryLastRawByChat: 'lastRaw',
+        memoryLastErrorsByChat: 'lastError',
+    };
+    const field = fieldMap[storeName];
+    if (!field) {
+        return;
+    }
+    const container = getChatMemoryContainer(context);
+    container[field] = value;
+    persistChatMemoryContainer(container, context);
 }
 
 function getCurrentMemoryStatus(context = getContext()) {
@@ -1293,18 +1375,8 @@ function setCurrentMemoryLastError(value, context = getContext()) {
 }
 
 function getMemoryGraph(context = getContext()) {
-    const chatKey = getCurrentChatMemoryKey(context);
-    settings.memoryGraphsByChat = settings.memoryGraphsByChat && typeof settings.memoryGraphsByChat === 'object' ? settings.memoryGraphsByChat : {};
-
-    if (!settings.memoryGraphsByChat[chatKey] || typeof settings.memoryGraphsByChat[chatKey] !== 'object') {
-        const hasPerChatGraphs = Object.keys(settings.memoryGraphsByChat).length > 0;
-        const shouldMigrateLegacyGraph = !hasPerChatGraphs && settings.memoryGraph && typeof settings.memoryGraph === 'object';
-        settings.memoryGraphsByChat[chatKey] = shouldMigrateLegacyGraph
-            ? cloneMemoryGraph(settings.memoryGraph)
-            : getDefaultMemoryGraph();
-    }
-
-    const graph = settings.memoryGraphsByChat[chatKey];
+    const container = getChatMemoryContainer(context);
+    const graph = container.graph || getDefaultMemoryGraph();
     graph.version = Number(graph.version || 1);
     graph.state = {
         ...getDefaultMemoryGraph().state,
@@ -1320,9 +1392,9 @@ function getMemoryGraph(context = getContext()) {
 }
 
 function saveMemoryGraph(graph = getMemoryGraph(), context = getContext()) {
-    const chatKey = getCurrentChatMemoryKey(context);
-    settings.memoryGraphsByChat = settings.memoryGraphsByChat && typeof settings.memoryGraphsByChat === 'object' ? settings.memoryGraphsByChat : {};
-    settings.memoryGraphsByChat[chatKey] = graph;
+    const container = getChatMemoryContainer(context);
+    container.graph = graph;
+    persistChatMemoryContainer(container, context);
     settings.memoryGraph = graph;
     Object.assign(extension_settings[MODULE_NAME], settings);
     saveSettingsDebounced();
