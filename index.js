@@ -3357,6 +3357,18 @@ function updateMemoryGraphViewBox(svg) {
     svg.setAttribute('viewBox', `${memoryGraphView.x} ${memoryGraphView.y} ${memoryGraphView.width} ${memoryGraphView.height}`);
 }
 
+function parseMemoryNodeTransform(transform) {
+    const text = String(transform || '');
+    const match = text.match(/translate\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/i);
+    if (!match) {
+        return null;
+    }
+    return {
+        x: Number(match[1]),
+        y: Number(match[2]),
+    };
+}
+
 function showMemoryNodePopover(nodeId, clientX, clientY) {
     memoryGraphSelectedNodeId = String(nodeId || '');
     renderMemoryPanel();
@@ -3447,6 +3459,7 @@ function bindMemoryGraphSvgInteractions() {
         const start = getMemoryGraphSvgPoint(svg, event.clientX, event.clientY);
         const graph = getMemoryGraph();
         const node = graph.nodes.find(item => item.id === nodeId);
+        const transform = parseMemoryNodeTransform($(this).attr('transform'));
         if (!node) {
             return;
         }
@@ -3454,8 +3467,8 @@ function bindMemoryGraphSvgInteractions() {
             nodeId,
             startX: start.x,
             startY: start.y,
-            nodeX: Number(node.x || 0),
-            nodeY: Number(node.y || 0),
+            nodeX: Number.isFinite(transform?.x) ? transform.x : Number(node.x || 0),
+            nodeY: Number.isFinite(transform?.y) ? transform.y : Number(node.y || 0),
             moved: false,
         };
         event.preventDefault();
