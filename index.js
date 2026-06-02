@@ -1114,7 +1114,10 @@ function getDefaultMemoryGraph() {
         version: 1,
         state: {
             current_location: '',
+            current_time: '',
+            protagonist_status: '',
             current_objective: '',
+            current_phase: '',
             active_topics: [],
             open_questions: [],
         },
@@ -1292,6 +1295,12 @@ function normalizeMemoryNode(rawNode, fallbackIndex = 0) {
         title,
         type: truncateText(rawNode?.type || 'event', 32),
         content: truncateText(rawNode?.content || rawNode?.description || '', 1200),
+        summary: truncateText(rawNode?.summary || title, 120),
+        location: truncateText(rawNode?.location || rawNode?.scene || '', 120),
+        timeSpan: truncateText(rawNode?.timeSpan || rawNode?.time_span || rawNode?.time || '', 120),
+        keys: uniqueStrings(Array.isArray(rawNode?.keys)
+            ? rawNode.keys
+            : String(rawNode?.keys || '').split(/[,\n，、]+/u)),
         tags: uniqueStrings(Array.isArray(rawNode?.tags)
             ? rawNode.tags
             : String(rawNode?.tags || '').split(/[,\n，、]+/u)),
@@ -1461,7 +1470,10 @@ function buildMemoryExtractionPrompt(recentMessages, graph) {
 正确输出：
 [[AIWBR_MEMORY_VARS_BEGIN]]
 memory_state_current_location_json="小巷口"
+memory_state_current_time_json="夜晚"
+memory_state_protagonist_status_json="紧张，试图脱身"
 memory_state_current_objective_json="脱身"
+memory_state_current_phase_json="冲突升级"
 memory_active_topics_json=["逃跑","拦截","导师"]
 memory_open_questions_json=["导师会如何处置主角？"]
 memory_nodes_json=[{"id":"event_escape_blocked","title":"逃跑被导师拦住","type":"event","content":"主角试图逃跑，被导师用魔法阻断去路。","tags":["冲突"],"importance":0.8,"credibility":0.9}]
@@ -1485,7 +1497,10 @@ ${recentContext || '(空)'}
 
 [[AIWBR_MEMORY_VARS_BEGIN]]
 memory_state_current_location_json=""
+memory_state_current_time_json=""
+memory_state_protagonist_status_json=""
 memory_state_current_objective_json=""
+memory_state_current_phase_json=""
 memory_active_topics_json=[]
 memory_open_questions_json=[]
 memory_nodes_json=[]
@@ -1498,7 +1513,7 @@ memory_summary_json=""
 </required_output>
 
 <field_rules>
-1. 上面 10 行必须全部输出，顺序不要变。
+1. 上面所有行必须全部输出，顺序不要变。
 2. 每行等号右边必须是合法 JSON 值；字符串用 "...", 数组用 [...]。
 3. 如果没有内容，字符串填 ""，数组填 []。
 4. memory_nodes_json 节点格式：
@@ -1530,7 +1545,10 @@ function buildMemoryExtractionRetryPrompt(recentMessages, graph) {
 <required_output>
 [[AIWBR_MEMORY_VARS_BEGIN]]
 memory_state_current_location_json=""
+memory_state_current_time_json=""
+memory_state_protagonist_status_json=""
 memory_state_current_objective_json=""
+memory_state_current_phase_json=""
 memory_active_topics_json=[]
 memory_open_questions_json=[]
 memory_nodes_json=[]
@@ -1595,7 +1613,10 @@ function parseMemoryUpdate(rawResponse, prompt = '') {
         return {
             state: {
                 current_location: readJsonValue('memory_state_current_location_json', ''),
+                current_time: readJsonValue('memory_state_current_time_json', ''),
+                protagonist_status: readJsonValue('memory_state_protagonist_status_json', ''),
                 current_objective: readJsonValue('memory_state_current_objective_json', ''),
+                current_phase: readJsonValue('memory_state_current_phase_json', ''),
                 active_topics: readJsonValue('memory_active_topics_json', []),
                 open_questions: readJsonValue('memory_open_questions_json', []),
             },
@@ -1699,8 +1720,17 @@ function applyMemoryGraphUpdate(update) {
     if (typeof state.current_location === 'string') {
         graph.state.current_location = truncateText(state.current_location, 120);
     }
+    if (typeof state.current_time === 'string') {
+        graph.state.current_time = truncateText(state.current_time, 120);
+    }
+    if (typeof state.protagonist_status === 'string') {
+        graph.state.protagonist_status = truncateText(state.protagonist_status, 180);
+    }
     if (typeof state.current_objective === 'string') {
         graph.state.current_objective = truncateText(state.current_objective, 180);
+    }
+    if (typeof state.current_phase === 'string') {
+        graph.state.current_phase = truncateText(state.current_phase, 120);
     }
     if (Array.isArray(state.active_topics)) {
         graph.state.active_topics = uniqueStrings([...state.active_topics]).slice(0, 12);
@@ -1726,6 +1756,10 @@ function applyMemoryGraphUpdate(update) {
                 title: node.title || existing.title,
                 type: node.type || existing.type,
                 content: node.content || existing.content,
+                summary: node.summary || existing.summary,
+                location: node.location || existing.location,
+                timeSpan: node.timeSpan || existing.timeSpan,
+                keys: uniqueStrings([...(existing.keys || []), ...(node.keys || [])]),
                 tags: uniqueStrings([...(existing.tags || []), ...(node.tags || [])]),
                 importance: Math.max(Number(existing.importance || 0), Number(node.importance || 0)),
                 credibility: Math.max(Number(existing.credibility || 0), Number(node.credibility || 0)),
@@ -1755,6 +1789,18 @@ function applyMemoryGraphUpdate(update) {
         if (rawUpdate.content || rawUpdate.newContent) {
             existing.content = truncateText(rawUpdate.content || rawUpdate.newContent, 1400);
         }
+        if (rawUpdate.summary) {
+            existing.summary = truncateText(rawUpdate.summary, 120);
+        }
+        if (rawUpdate.location) {
+            existing.location = truncateText(rawUpdate.location, 120);
+        }
+        if (rawUpdate.timeSpan || rawUpdate.time_span) {
+            existing.timeSpan = truncateText(rawUpdate.timeSpan || rawUpdate.time_span, 120);
+        }
+        if (rawUpdate.keys) {
+            existing.keys = uniqueStrings([...(existing.keys || []), ...(Array.isArray(rawUpdate.keys) ? rawUpdate.keys : String(rawUpdate.keys).split(/[,\n，、]+/u))]);
+        }
         if (rawUpdate.importance !== undefined) {
             existing.importance = clampNumber(rawUpdate.importance, existing.importance || 0.6, 0, 1);
         }
@@ -1772,6 +1818,7 @@ function applyMemoryGraphUpdate(update) {
             id: `event_${Date.now().toString(36)}`,
             title: fallbackTitle,
             type: 'event',
+            summary: fallbackTitle,
             content: update.summary.trim(),
             tags: ['自动摘要'],
             importance: 0.55,
@@ -2810,6 +2857,12 @@ function collectMemoryKeywords(node) {
 
     push(node.id);
     push(node.title);
+    push(node.summary);
+    push(node.location);
+    push(node.timeSpan);
+    for (const key of Array.isArray(node.keys) ? node.keys : []) {
+        push(key);
+    }
     for (const tag of Array.isArray(node.tags) ? node.tags : []) {
         push(tag);
     }
@@ -2851,6 +2904,25 @@ function buildMemoryCandidates(graph) {
     });
 }
 
+function getMemoryEventNodes(graph) {
+    return (Array.isArray(graph?.nodes) ? graph.nodes : [])
+        .filter(node => ['event', 'quest'].includes(String(node.type || '').toLowerCase()))
+        .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+}
+
+function getMemoryStateRows(graph) {
+    const state = graph?.state || {};
+    return [
+        { key: 'current_location', label: '当前地点', value: state.current_location || '' },
+        { key: 'current_time', label: '当前时间', value: state.current_time || '' },
+        { key: 'protagonist_status', label: '主角状态', value: state.protagonist_status || '' },
+        { key: 'current_objective', label: '当前目标', value: state.current_objective || '' },
+        { key: 'current_phase', label: '当前阶段', value: state.current_phase || '' },
+        { key: 'active_topics', label: '活跃主题', value: (state.active_topics || []).join('，') },
+        { key: 'open_questions', label: '未解问题', value: (state.open_questions || []).join('；') },
+    ];
+}
+
 function recallMemoryCandidates(graph, recentMessages, mvuSummary) {
     const candidates = recallCandidates(buildMemoryCandidates(graph), recentMessages, mvuSummary)
         .filter(entry => entry.score > 0 || ['event', 'quest', 'character', 'location'].includes(entry.memoryType));
@@ -2882,8 +2954,17 @@ function buildMemoryInjection(graph, selectedMemories) {
     if (String(state.current_location || '').trim()) {
         parts.push(`\n当前地点：${state.current_location.trim()}\n`);
     }
+    if (String(state.current_time || '').trim()) {
+        parts.push(`当前时间：${state.current_time.trim()}\n`);
+    }
+    if (String(state.protagonist_status || '').trim()) {
+        parts.push(`主角状态：${state.protagonist_status.trim()}\n`);
+    }
     if (String(state.current_objective || '').trim()) {
         parts.push(`当前目标：${state.current_objective.trim()}\n`);
+    }
+    if (String(state.current_phase || '').trim()) {
+        parts.push(`当前阶段：${state.current_phase.trim()}\n`);
     }
     if (Array.isArray(state.active_topics) && state.active_topics.length) {
         parts.push(`活跃主题：${state.active_topics.join('、')}\n`);
@@ -2899,7 +2980,8 @@ function buildMemoryInjection(graph, selectedMemories) {
         parts.push('\n近期相关记忆：\n');
         for (const entry of memoryItems.slice(0, MAX_MEMORY_SELECTED)) {
             const node = entry.nodeRef || {};
-            parts.push(`- ${entry.comment || node.title || entry.uid}：${truncateText(node.content || entry.content || '', 220)}\n`);
+            const prefix = [node.timeSpan, node.location].filter(Boolean).join(' | ');
+            parts.push(`- ${entry.comment || node.title || entry.uid}${prefix ? ` [${prefix}]` : ''}：${truncateText(node.summary || node.content || entry.content || '', 220)}\n`);
         }
     }
 
@@ -3338,36 +3420,66 @@ function renderMemoryPanel() {
     $('#ai_wbr_memory_error').text(getCurrentMemoryLastError() || '尚无错误');
     renderMemoryGraphSvg(graph);
 
-    const state = graph.state || {};
+    const stateRows = getMemoryStateRows(graph);
+    const stateTable = $('<table class="ai-wbr-memory-table"></table>');
+    stateTable.append('<thead><tr><th>状态字段</th><th>当前值</th></tr></thead>');
+    const stateBody = $('<tbody></tbody>');
+    for (const row of stateRows) {
+        stateBody.append(
+            $('<tr></tr>')
+                .append($('<th scope="row"></th>').text(row.label))
+                .append($('<td></td>').append(
+                    $('<input class="text_pole" type="text" />')
+                        .attr('data-memory-state-field', row.key)
+                        .val(row.value),
+                )),
+        );
+    }
+    stateTable.append(stateBody);
     $('#ai_wbr_memory_state_editor').empty().append(
-        $('<div class="ai-wbr-memory-subtitle"><b>当前状态</b></div>'),
-        $('<div class="ai-wbr-grid ai-wbr-memory-state-grid"></div>')
-            .append($('<label></label>').text('当前地点'))
-            .append($('<input class="text_pole" type="text" data-memory-state-field="current_location" />').val(state.current_location || ''))
-            .append($('<label></label>').text('当前目标'))
-            .append($('<input class="text_pole" type="text" data-memory-state-field="current_objective" />').val(state.current_objective || ''))
-            .append($('<label></label>').text('活跃主题'))
-            .append($('<input class="text_pole" type="text" data-memory-state-field="active_topics" />').val((state.active_topics || []).join('，')))
-            .append($('<label></label>').text('未解问题'))
-            .append($('<input class="text_pole" type="text" data-memory-state-field="open_questions" />').val((state.open_questions || []).join('，'))),
+        $('<div class="ai-wbr-memory-subtitle"><b>状态表（固定更新）</b></div>'),
+        $('<div class="ai-wbr-memory-table-wrap"></div>').append(stateTable),
     );
 
+    const eventNodes = getMemoryEventNodes(graph);
     const nodesContainer = $('#ai_wbr_memory_nodes').empty();
-    nodesContainer.append($('<div class="ai-wbr-memory-subtitle"><b>记忆节点</b></div>'));
-    if (!graph.nodes.length) {
-        nodesContainer.append('<div class="ai-wbr-token-empty">暂无节点</div>');
-    }
-    for (const node of graph.nodes) {
-        nodesContainer.append(
-            $('<div class="ai-wbr-memory-card"></div>')
-                .attr('data-memory-node-id', node.id)
-                .append($('<div class="ai-wbr-memory-card-head"></div>')
-                    .append($('<input class="text_pole" type="text" data-memory-node-field="title" />').val(node.title || ''))
-                    .append($('<input class="text_pole ai-wbr-memory-type" type="text" data-memory-node-field="type" />').val(node.type || 'event'))
-                    .append($('<button class="menu_button ai-wbr-memory-delete-node" type="button">删除</button>')))
-                .append($('<textarea class="text_pole ai-wbr-memory-content" rows="2" data-memory-node-field="content"></textarea>').val(node.content || ''))
-                .append($('<input class="text_pole" type="text" data-memory-node-field="tags" placeholder="标签，用逗号分隔" />').val((node.tags || []).join('，'))),
-        );
+    nodesContainer.append($('<div class="ai-wbr-memory-subtitle"><b>事件表（剧情推进会新增）</b></div>'));
+    if (!eventNodes.length) {
+        nodesContainer.append('<div class="ai-wbr-token-empty">暂无事件记录</div>');
+    } else {
+        const eventTable = $('<table class="ai-wbr-memory-table ai-wbr-memory-event-table"></table>');
+        eventTable.append('<thead><tr><th>标题</th><th>地点 / 时间</th><th>概要</th><th>详细纪要</th><th>关键词</th><th>操作</th></tr></thead>');
+        const eventBody = $('<tbody></tbody>');
+        for (const node of eventNodes) {
+            eventBody.append(
+                $('<tr></tr>')
+                    .attr('data-memory-node-id', node.id)
+                    .append($('<td></td>').append(
+                        $('<input class="text_pole" type="text" data-memory-node-field="title" />').val(node.title || ''),
+                    ))
+                    .append($('<td></td>').append(
+                        $('<input class="text_pole" type="text" data-memory-node-field="location" placeholder="地点" />').val(node.location || ''),
+                        $('<input class="text_pole m-t-05" type="text" data-memory-node-field="timeSpan" placeholder="时间跨度" />').val(node.timeSpan || ''),
+                    ))
+                    .append($('<td></td>').append(
+                        $('<input class="text_pole" type="text" data-memory-node-field="summary" />').val(node.summary || ''),
+                    ))
+                    .append($('<td></td>').append(
+                        $('<textarea class="text_pole ai-wbr-memory-content" rows="3" data-memory-node-field="content"></textarea>').val(node.content || ''),
+                    ))
+                    .append($('<td></td>').append(
+                        $('<input class="text_pole" type="text" data-memory-node-field="keys" placeholder="关键词，用逗号分隔" />').val((node.keys || []).join('，')),
+                        $('<input class="text_pole m-t-05" type="text" data-memory-node-field="tags" placeholder="标签，用逗号分隔" />').val((node.tags || []).join('，')),
+                    ))
+                    .append($('<td></td>').append(
+                        $('<div class="ai-wbr-memory-event-actions"></div>')
+                            .append($('<input class="text_pole ai-wbr-memory-type" type="text" data-memory-node-field="type" />').val(node.type || 'event'))
+                            .append($('<button class="menu_button ai-wbr-memory-delete-node" type="button">删除</button>')),
+                    )),
+            );
+        }
+        eventTable.append(eventBody);
+        nodesContainer.append($('<div class="ai-wbr-memory-table-wrap"></div>').append(eventTable));
     }
 
     const linksContainer = $('#ai_wbr_memory_links').empty();
@@ -3462,8 +3574,12 @@ function bindMemoryPanelActions() {
             const value = String($(this).val() || '');
             if (field === 'tags') {
                 node.tags = uniqueStrings(value.split(/[,\n，、]+/u));
+            } else if (field === 'keys') {
+                node.keys = uniqueStrings(value.split(/[,\n，、]+/u));
             } else if (field === 'title' || field === 'type' || field === 'content') {
                 node[field] = value;
+            } else if (field === 'summary' || field === 'location' || field === 'timeSpan') {
+                node[field] = value.trim();
             }
             node.updatedAt = new Date().toISOString();
             graph.updatedAt = node.updatedAt;
