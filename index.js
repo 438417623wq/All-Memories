@@ -1665,14 +1665,16 @@ function getMemoryGraph(context = getContext()) {
     return graph;
 }
 
-function saveMemoryGraph(graph = getMemoryGraph(), context = getContext()) {
+function saveMemoryGraph(graph = getMemoryGraph(), context = getContext(), skipRender = false) {
     const container = getChatMemoryContainer(context);
     container.graph = graph;
     persistChatMemoryContainer(container, context);
     settings.memoryGraph = graph;
     Object.assign(extension_settings[MODULE_NAME], settings);
     saveSettingsDebounced();
-    renderMemoryPanel();
+    if (!skipRender) {
+        renderMemoryPanel();
+    }
 }
 
 function setMemoryStatus(text, context = getContext()) {
@@ -3579,6 +3581,7 @@ function renderMemoryGraphSvg(graph) {
     const centerY = height / 2;
     const radius = Math.min(134, 50 + nodes.length * 9);
     const positions = new Map();
+    let layoutChanged = false;
     nodes.forEach((node, index) => {
         if (Number.isFinite(Number(node.x)) && Number.isFinite(Number(node.y))) {
             node.x = Number(node.x);
@@ -3603,7 +3606,12 @@ function renderMemoryGraphSvg(graph) {
             x: node.x,
             y: node.y,
         });
+        layoutChanged = true;
     });
+
+    if (layoutChanged) {
+        saveMemoryGraph(graph, getContext(), true);
+    }
 
     const visibleIds = new Set(nodes.map(node => node.id));
     const edges = graph.links.filter(link => visibleIds.has(link.source) && visibleIds.has(link.target)).slice(-32);
@@ -3962,6 +3970,36 @@ function bindMemoryGraphSvgInteractions() {
         if (!node) {
             return;
         }
+
+        const nodePositions = new Map();
+        container.find('.ai-wbr-memory-node').each(function () {
+            const id = String($(this).data('memoryNodeId'));
+            const t = parseMemoryNodeTransform($(this).attr('transform'));
+            if (t) {
+                nodePositions.set(id, t);
+            }
+        });
+
+        const visibleIds = new Set(Array.from(nodePositions.keys()));
+        const edges = graph.links.filter(link => visibleIds.has(link.source) && visibleIds.has(link.target));
+        const pairBuckets = new Map();
+        edges.forEach((link) => {
+            const pairKey = [String(link.source || ''), String(link.target || '')].sort().join('||');
+            if (!pairBuckets.has(pairKey)) {
+                pairBuckets.set(pairKey, []);
+            }
+            pairBuckets.get(pairKey).push(link);
+        });
+
+        const linkOffsets = new Map();
+        edges.forEach((link) => {
+            const pairKey = [String(link.source || ''), String(link.target || '')].sort().join('||');
+            const siblings = (pairBuckets.get(pairKey) || []).slice().sort((a, b) => String(a.id || '').localeCompare(String(b.id || '')));
+            const siblingIndex = siblings.findIndex(item => String(item.id || '') === String(link.id || ''));
+            const offsetIndex = siblingIndex - ((siblings.length - 1) / 2);
+            linkOffsets.set(link.id, siblings.length > 1 ? offsetIndex * 18 : 0);
+        });
+
         memoryGraphDrag = {
             nodeId,
             startX: start.x,
@@ -3969,6 +4007,9 @@ function bindMemoryGraphSvgInteractions() {
             nodeX: Number.isFinite(transform?.x) ? transform.x : Number(node.x || 0),
             nodeY: Number.isFinite(transform?.y) ? transform.y : Number(node.y || 0),
             moved: false,
+            nodePositions,
+            linkOffsets,
+            links: edges.filter(link => link.source === nodeId || link.target === nodeId)
         };
         event.preventDefault();
         event.stopPropagation();
@@ -4024,25 +4065,20 @@ function bindMemoryGraphSvgInteractions() {
         if (Math.abs(dx) + Math.abs(dy) > 1.5) {
             memoryGraphDrag.moved = true;
         }
-        const graph = getMemoryGraph();
-        const node = graph.nodes.find(item => item.id === memoryGraphDrag.nodeId);
-        if (!node) {
-            return;
-        }
+        
         const clamped = clampMemoryNodePositionToView(memoryGraphDrag.nodeX + dx, memoryGraphDrag.nodeY + dy);
-        node.x = clamped.x;
-        node.y = clamped.y;
+        memoryGraphDrag.nodePositions.set(memoryGraphDrag.nodeId, { x: clamped.x, y: clamped.y });
+        
         const group = container.find(`.ai-wbr-memory-node[data-memory-node-id="${escapeCssSelector(memoryGraphDrag.nodeId)}"]`);
-        group.attr('transform', `translate(${node.x},${node.y})`);
-        graph.links.forEach((link) => {
-            if (link.source !== node.id && link.target !== node.id) {
-                return;
-            }
+        group.attr('transform', `translate(${clamped.x},${clamped.y})`);
+        
+        memoryGraphDrag.links.forEach((link) => {
             const line = container.find(`[data-memory-link-id="${escapeCssSelector(String(link.id || ''))}"]`);
-            const source = graph.nodes.find(item => item.id === link.source);
-            const target = graph.nodes.find(item => item.id === link.target);
+            const source = memoryGraphDrag.nodePositions.get(link.source);
+            const target = memoryGraphDrag.nodePositions.get(link.target);
+            const laneOffset = memoryGraphDrag.linkOffsets.get(link.id) || 0;
             if (source && target) {
-                line.attr('d', buildMemoryEdgePath(source, target));
+                line.attr('d', buildMemoryEdgePath(source, target, laneOffset));
             }
         });
     });
@@ -4072,7 +4108,7 @@ function bindMemoryGraphSvgInteractions() {
             node.updatedAt = new Date().toISOString();
         }
         graph.updatedAt = new Date().toISOString();
-        saveMemoryGraph(graph);
+        saveMemoryGraph(graph, getContext(), true);
         lastObservedChatScopedUiSignature = getChatScopedUiSignature();
 
         if (!drag.moved) {
