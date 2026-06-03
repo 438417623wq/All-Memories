@@ -3515,7 +3515,7 @@ function buildMemoryInjection(graph, selectedMemories) {
 
     if (memoryItems.length) {
         parts.push('\n近期相关记忆：\n');
-        for (const entry of memoryItems.slice(0, MAX_MEMORY_SELECTED)) {
+        for (const entry of memoryItems) {
             const node = entry.nodeRef || {};
             const prefix = [node.timeSpan, node.location].filter(Boolean).join(' | ');
             parts.push(`- ${entry.comment || node.title || entry.uid}${prefix ? ` [${prefix}]` : ''}：${truncateText(node.summary || node.content || entry.content || '', 220)}\n`);
