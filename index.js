@@ -2653,7 +2653,7 @@ function recallCandidates(entries, recentMessages, mvuSummary) {
         .slice(0, settings.maxCandidates);
 }
 
-function buildAiPrompt(recentMessages, mvuSummary, candidates) {
+function buildAiPrompt(recentMessages, mvuSummary, candidates, maxSelectCount = settings.maxSelected) {
     const lastUserMessage = getLastUserMessage(recentMessages);
     const recentContext = recentMessages
         .map(message => `${message.name || (message.isUser ? 'User' : 'Assistant')}: ${truncateText(message.text, MAX_ROUTER_CONTEXT_PREVIEW)}`)
@@ -2664,7 +2664,7 @@ function buildAiPrompt(recentMessages, mvuSummary, candidates) {
     }).join('\n');
 
     return `<task>
-从候选 keys 中选择最多 ${settings.maxSelected} 条“本轮真正相关”的世界书。
+从候选 keys 中选择最多 ${maxSelectCount} 条“本轮真正相关”的条目（世界书或记忆）。
 </task>
 
 <rules>
@@ -2707,7 +2707,7 @@ ${candidateText || '(无)'}
 </candidate_keys>`;
 }
 
-function buildCompactAiPrompt(recentMessages, mvuSummary, candidates) {
+function buildCompactAiPrompt(recentMessages, mvuSummary, candidates, maxSelectCount = settings.maxSelected) {
     const lastUserMessage = truncateText(getLastUserMessage(recentMessages), 220);
     const compactContext = recentMessages
         .slice(-4)
@@ -2719,7 +2719,7 @@ function buildCompactAiPrompt(recentMessages, mvuSummary, candidates) {
         .map(entry => `- ${(entry.keys.all.length ? entry.keys.all.join(' / ') : '(无 keys)')}`)
         .join('\n');
 
-    return `<task>从候选 keys 中选择最多 ${settings.maxSelected} 条本轮相关世界书。</task>
+    return `<task>从候选 keys 中选择最多 ${maxSelectCount} 条本轮相关条目。</task>
 <rules>只输出严格 JSON；禁止解释；禁止 reasoning；禁止额外字段；如果没有合适条目，输出 {"selected":[]}。</rules>
 <output>{"selected":[{"key":"命中的 key","reason":"简短原因"}]}</output>
 <last_user_message>${lastUserMessage || '(空)'}</last_user_message>
@@ -3111,6 +3111,7 @@ async function sendSeparateRouterRequest(context, prompt, {
     candidates = [],
     systemPrompt = settings.systemPrompt,
     maxTokens = getRouterRequestMaxTokens(),
+    maxSelectCount = settings.maxSelected,
 } = {}) {
     const firstRequest = buildPlainSeparateChatPayload(prompt, {
         systemPrompt,
@@ -3125,6 +3126,7 @@ async function sendSeparateRouterRequest(context, prompt, {
         recentMessages,
         mvuSummary,
         candidates,
+        maxSelectCount
     );
     const retryRequest = buildPlainSeparateChatPayload(compactPrompt, {
         systemPrompt: '你是前置世界书路由 JSON 输出器。禁止解释，禁止 reasoning，只输出 {"selected":[...]}。',
@@ -3152,14 +3154,15 @@ function getRouterRequestData(context, prompt) {
     });
 }
 
-async function selectWithSeparateRouterModel(context, recentMessages, mvuSummary, candidates) {
-    const prompt = buildAiPrompt(recentMessages, mvuSummary, candidates);
+async function selectWithSeparateRouterModel(context, recentMessages, mvuSummary, candidates, maxSelectCount = settings.maxSelected) {
+    const prompt = buildAiPrompt(recentMessages, mvuSummary, candidates, maxSelectCount);
     const result = await sendSeparateRouterRequest(context, prompt, {
         recentMessages,
         mvuSummary,
         candidates,
         systemPrompt: settings.systemPrompt,
         maxTokens: getRouterRequestMaxTokens(),
+        maxSelectCount,
     });
     const promptForParse = result.usedCompactPrompt ? `${prompt}\n\n----- COMPACT RETRY PROMPT -----\n\n${result.retryPrompt}` : prompt;
     const parsed = parseSelectionJson(result.raw, candidates, promptForParse);
@@ -3170,17 +3173,17 @@ async function selectWithSeparateRouterModel(context, recentMessages, mvuSummary
     };
 }
 
-async function runSingleAiSelectionAttempt(context, recentMessages, mvuSummary, candidates) {
+async function runSingleAiSelectionAttempt(context, recentMessages, mvuSummary, candidates, maxSelectCount = settings.maxSelected) {
     let parsed;
     let prompt = '';
     let rawPreview = '';
     if (settings.routerUseSeparateModel && settings.routerApiUrl && settings.routerApiKey && settings.routerModel) {
-        const result = await selectWithSeparateRouterModel(context, recentMessages, mvuSummary, candidates);
+        const result = await selectWithSeparateRouterModel(context, recentMessages, mvuSummary, candidates, maxSelectCount);
         parsed = result.parsed;
         prompt = result.prompt;
         rawPreview = result.rawPreview;
     } else {
-        prompt = buildAiPrompt(recentMessages, mvuSummary, candidates);
+        prompt = buildAiPrompt(recentMessages, mvuSummary, candidates, maxSelectCount);
         const raw = await context.generateRaw({
             prompt,
             systemPrompt: settings.systemPrompt,
@@ -3195,7 +3198,7 @@ async function runSingleAiSelectionAttempt(context, recentMessages, mvuSummary, 
     return { parsed, prompt, rawPreview };
 }
 
-async function selectWithAi(context, recentMessages, mvuSummary, candidates) {
+async function selectWithAi(context, recentMessages, mvuSummary, candidates, maxSelectCount = settings.maxSelected) {
     if (candidates.length === 0) {
         return {
             selected: [],
@@ -3212,7 +3215,7 @@ async function selectWithAi(context, recentMessages, mvuSummary, candidates) {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         try {
-            const result = await runSingleAiSelectionAttempt(context, recentMessages, mvuSummary, candidates);
+            const result = await runSingleAiSelectionAttempt(context, recentMessages, mvuSummary, candidates, maxSelectCount);
             parsed = result.parsed;
             prompt = result.prompt;
             rawPreview = result.rawPreview;
@@ -3265,7 +3268,7 @@ async function selectWithAi(context, recentMessages, mvuSummary, candidates) {
             reason: truncateText(item.reason || 'AI selected this entry.', 240),
         });
 
-        if (selected.length >= settings.maxSelected) {
+        if (selected.length >= maxSelectCount) {
             break;
         }
     }
@@ -4775,15 +4778,16 @@ async function routeWorldbookForMessages(context, recentMessages, routeSource = 
     const mvuSummary = getCombinedStateSummary(context);
     const memoryGraph = getMemoryGraph(context);
     const memoryCandidates = recallMemoryCandidates(memoryGraph, recentMessages, mvuSummary);
-    const selectedMemories = selectMemoryWithFallback(memoryCandidates);
     const entries = await getWorldbookEntries(context);
-    const candidates = recallCandidates(entries, recentMessages, mvuSummary);
+    const wbCandidates = recallCandidates(entries, recentMessages, mvuSummary);
 
-    if (candidates.length === 0 && !selectedMemories.length && !hasMemoryState(memoryGraph)) {
+    const combinedCandidates = [...wbCandidates, ...memoryCandidates];
+
+    if (combinedCandidates.length === 0 && !hasMemoryState(memoryGraph)) {
         debugRun([], [], '', `none-${routeSource}`, '', '', [], []);
         lastRouteCompletedAt = Date.now();
         return {
-            candidates,
+            candidates: wbCandidates,
             selected: [],
             memoryCandidates,
             selectedMemories: [],
@@ -4792,19 +4796,30 @@ async function routeWorldbookForMessages(context, recentMessages, routeSource = 
         };
     }
 
-    let selected = [];
+    let selectedWb = [];
+    let selectedMem = [];
     let routerPrompt = '';
     let routerRaw = '';
     let source = `ai-${routeSource}`;
     let shouldFallback = false;
-    if (candidates.length) {
+
+    if (combinedCandidates.length) {
         try {
             isRouterSelectionRequest = true;
-            const aiResult = await selectWithAi(context, recentMessages, mvuSummary, candidates);
-            selected = aiResult.selected;
+            const maxSelectCount = settings.maxSelected + MAX_MEMORY_SELECTED;
+            const aiResult = await selectWithAi(context, recentMessages, mvuSummary, combinedCandidates, maxSelectCount);
+            
+            for (const item of aiResult.selected) {
+                if (item.source === 'memory') {
+                    selectedMem.push(item);
+                } else {
+                    selectedWb.push(item);
+                }
+            }
+            
             routerPrompt = aiResult.prompt;
             routerRaw = aiResult.rawPreview;
-            source = selected.length ? `ai-${routeSource}` : `empty-ai-${routeSource}`;
+            source = (selectedWb.length || selectedMem.length) ? `ai-${routeSource}` : `empty-ai-${routeSource}`;
         } catch (error) {
             source = `keyword-ai-fallback-${routeSource}`;
             shouldFallback = true;
@@ -4816,24 +4831,25 @@ async function routeWorldbookForMessages(context, recentMessages, routeSource = 
         }
     }
 
-    if (shouldFallback && !selected.length) {
-        selected = selectWithFallback(candidates);
+    if (shouldFallback && !selectedWb.length && !selectedMem.length) {
+        selectedWb = selectWithFallback(wbCandidates);
+        selectedMem = selectMemoryWithFallback(memoryCandidates);
     }
 
-    if (!candidates.length && (selectedMemories.length || hasMemoryState(memoryGraph))) {
+    if (!combinedCandidates.length && (selectedMem.length || hasMemoryState(memoryGraph))) {
         source = `memory-${routeSource}`;
     }
 
-    const injection = buildInjection(selected, memoryGraph, selectedMemories);
+    const injection = buildInjection(selectedWb, memoryGraph, selectedMem);
     setExtensionPrompt(PROMPT_KEY, injection, settings.position, settings.depth, false, settings.role);
-    debugRun(candidates, selected, injection, source, routerPrompt, routerRaw, memoryCandidates, selectedMemories);
+    debugRun(wbCandidates, selectedWb, injection, source, routerPrompt, routerRaw, memoryCandidates, selectedMem);
     lastRouteCompletedAt = Date.now();
 
     return {
-        candidates,
-        selected,
+        candidates: wbCandidates,
+        selected: selectedWb,
         memoryCandidates,
-        selectedMemories,
+        selectedMemories: selectedMem,
         injection,
         source,
     };
