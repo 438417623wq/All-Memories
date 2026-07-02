@@ -5427,6 +5427,114 @@ function bindTitleBlocklistEditor() {
     renderTitleBlocklistEditor();
 }
 
+function createFloatingMemoryWindow() {
+    if ($('#ai_wbr_fab').length) {
+        return;
+    }
+
+    const fab = $('<div id="ai_wbr_fab" class="ai-wbr-fab" title="打开记忆图谱"><i class="fa-solid fa-circle-chevron-down"></i></div>');
+    // 注意：局部变量命名为 win，避免遮蔽全局 window 对象（拖拽时需要用 window.innerWidth/innerHeight 取视口尺寸）
+    const win = $('<div id="ai_wbr_floating_window" class="ai-wbr-floating-window">' +
+        '<div class="ai-wbr-floating-header" id="ai_wbr_floating_header">' +
+            '<div class="ai-wbr-floating-title"><i class="fa-solid fa-network-wired"></i> 记忆图谱</div>' +
+            '<div class="ai-wbr-floating-close" id="ai_wbr_floating_close"><i class="fa-solid fa-times"></i></div>' +
+        '</div>' +
+        '<div class="ai-wbr-floating-content" id="ai_wbr_floating_content"></div>' +
+    '</div>');
+
+    $('body').append(fab).append(win);
+
+    // DOM move: 把整个记忆 section 移入悬浮窗内容区，保留所有 #ai_wbr_memory_* id 与事件绑定
+    const memorySection = $('#ai_wbr_memory_section');
+    if (memorySection.length) {
+        memorySection.appendTo('#ai_wbr_floating_content');
+    }
+
+    // 切换悬浮窗显隐
+    function toggleWindow() {
+        const isOpen = win.hasClass('open');
+        if (isOpen) {
+            win.removeClass('open').addClass('closing');
+            setTimeout(() => {
+                win.removeClass('closing');
+            }, 220); // 与 CSS 关闭动画时长一致
+        } else {
+            win.removeClass('closing').addClass('open');
+            // 打开后重新渲染记忆面板，让 SVG 适配悬浮窗容器尺寸
+            renderMemoryPanel();
+            // 动画结束后再渲染一次，确保 SVG 取到动画终态的准确尺寸
+            setTimeout(renderMemoryPanel, 340);
+        }
+    }
+
+    fab.on('click', toggleWindow);
+    $('#ai_wbr_floating_close').on('click', toggleWindow);
+
+    // ESC 关闭
+    $(document).on('keydown', (event) => {
+        if (event.key === 'Escape' && win.hasClass('open')) {
+            toggleWindow();
+        }
+    });
+
+    // 拖拽逻辑（仅标题栏触发）
+    let isDragging = false;
+    let startX, startY, initialLeft, initialTop;
+
+    const header = $('#ai_wbr_floating_header');
+
+    header.on('mousedown', (e) => {
+        if ($(e.target).closest('#ai_wbr_floating_close').length) return; // 排除关闭按钮
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+
+        // 把 bottom/right 定位转换为 left/top，便于拖拽
+        const rect = win[0].getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
+
+        win.css({
+            right: 'auto',
+            bottom: 'auto',
+            left: initialLeft + 'px',
+            top: initialTop + 'px'
+        });
+
+        $('body').css('user-select', 'none'); // 拖拽时禁止选中文本
+    });
+
+    $(document).on('mousemove', (e) => {
+        if (!isDragging) return;
+
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+
+        let newLeft = initialLeft + dx;
+        let newTop = initialTop + dy;
+
+        // 限制在视口范围内（用全局 window.innerWidth/innerHeight 取视口尺寸）
+        const rect = win[0].getBoundingClientRect();
+        const maxLeft = Math.max(0, window.innerWidth - rect.width);
+        const maxTop = Math.max(0, window.innerHeight - rect.height);
+
+        newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+        newTop = Math.max(0, Math.min(newTop, maxTop));
+
+        win.css({
+            left: newLeft + 'px',
+            top: newTop + 'px'
+        });
+    });
+
+    $(document).on('mouseup', () => {
+        if (isDragging) {
+            isDragging = false;
+            $('body').css('user-select', '');
+        }
+    });
+}
+
 async function addSettingsUi() {
     const html = await renderExtensionTemplateAsync('third-party/ai-worldbook-router', 'settings');
     $('#extensions_settings2').append(html);
@@ -5467,6 +5575,8 @@ async function addSettingsUi() {
         await fetchRouterModels();
     });
     $('#ai_wbr_router_status').text(settings.routerStatus || '未连接');
+
+    createFloatingMemoryWindow();
 
     renderDebugPanel();
     renderMemoryPanel();
