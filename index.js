@@ -5890,7 +5890,59 @@ async function addSettingsUi() {
 globalThis.ai_worldbook_router_intercept = interceptGeneration;
 installFetchFallbackHook();
 
-jQuery(async () => {
+function createEmergencyEntryNative() {
+    if (document.getElementById('ai_wbr_emergency_fab') || document.getElementById('ai_wbr_fab')) {
+        return;
+    }
+
+    const button = document.createElement('button');
+    button.id = 'ai_wbr_emergency_fab';
+    button.type = 'button';
+    button.title = '打开世界书读取控制台';
+    button.textContent = '世界书';
+    button.style.cssText = [
+        'position:fixed',
+        'right:14px',
+        'bottom:calc(82px + env(safe-area-inset-bottom, 0px))',
+        'z-index:2147483647',
+        'min-width:58px',
+        'height:42px',
+        'padding:0 10px',
+        'border-radius:999px',
+        'border:1px solid rgba(176,225,255,.72)',
+        'background:rgba(20,24,34,.96)',
+        'color:#d7f5ff',
+        'font-size:13px',
+        'font-weight:700',
+        'box-shadow:0 10px 24px rgba(0,0,0,.35),0 0 18px rgba(125,212,255,.28)',
+        'backdrop-filter:blur(8px)',
+        'cursor:pointer'
+    ].join(';');
+
+    button.addEventListener('click', () => {
+        const jq = globalThis.jQuery || globalThis.$;
+        if (typeof jq !== 'function') {
+            alert('世界书读取已加载，但 jQuery 尚未就绪。请稍等几秒或刷新页面。');
+            return;
+        }
+
+        try {
+            createFloatingMemoryWindow();
+            button.remove();
+            const fullButton = document.getElementById('ai_wbr_fab');
+            fullButton?.click();
+        } catch (error) {
+            console.error(`${LOG_PREFIX} Failed to open standalone console from emergency entry`, error);
+            alert(`世界书读取入口创建失败：${error?.message || error}`);
+        }
+    });
+
+    (document.body || document.documentElement).appendChild(button);
+}
+
+createEmergencyEntryNative();
+
+async function bootAiWorldbookRouter() {
     try {
         ensureSettings();
         createFloatingMemoryWindow();
@@ -5946,6 +5998,7 @@ jQuery(async () => {
         console.error(`${LOG_PREFIX} Failed during initialization`, error);
         try {
             ensureSettings();
+            createEmergencyEntryNative();
             createFloatingMemoryWindow();
             lastRun.error = `初始化失败：${error?.message || error}`;
             renderStandaloneConsole('overview');
@@ -5953,4 +6006,13 @@ jQuery(async () => {
             console.error(`${LOG_PREFIX} Failed to create fallback console`, fallbackError);
         }
     }
-});
+}
+
+const readyRunner = globalThis.jQuery || globalThis.$;
+if (typeof readyRunner === 'function') {
+    readyRunner(bootAiWorldbookRouter);
+} else if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootAiWorldbookRouter, { once: true });
+} else {
+    setTimeout(bootAiWorldbookRouter, 0);
+}
