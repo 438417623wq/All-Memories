@@ -6,7 +6,7 @@
     'use strict';
 
     const NAMESPACE = 'AIWorldbookRouter';
-    const VERSION = '0.3.9';
+    const VERSION = '0.4.0';
     const LOG_PREFIX = '[AI Worldbook Router Bootstrap]';
     const ENTRY_ID = 'ai_wbr_extension_entry';
     const ROW_ID = 'ai_wbr_extension_row';
@@ -25,6 +25,7 @@
     let mountTimer = null;
     let observer = null;
     let lastOpenAt = 0;
+    let keepPanelUntil = 0;
 
     window[NAMESPACE] = Object.assign(window[NAMESPACE] || {}, {
         loaded: true,
@@ -63,6 +64,43 @@
             'baseUrl: ' + baseUrl,
             'coreError: ' + (coreLoadError?.message || coreLoadError || 'none'),
         ].join('\n');
+    }
+
+    function forceConsoleVisible() {
+        const win = document.getElementById('ai_wbr_floating_window');
+        if (!win) return false;
+
+        win.classList.remove('closing');
+        win.classList.add('open');
+        win.style.setProperty('visibility', 'visible', 'important');
+        win.style.setProperty('opacity', '1', 'important');
+        win.style.setProperty('pointer-events', 'auto', 'important');
+        win.style.setProperty('z-index', '2147483646', 'important');
+        win.style.setProperty('transform', 'none', 'important');
+
+        if (window.matchMedia?.('(max-width: 720px)').matches) {
+            win.style.setProperty('position', 'fixed', 'important');
+            win.style.setProperty('inset', '0', 'important');
+            win.style.setProperty('right', '0', 'important');
+            win.style.setProperty('bottom', '0', 'important');
+            win.style.setProperty('width', '100vw', 'important');
+            win.style.setProperty('height', '100dvh', 'important');
+            win.style.setProperty('max-width', '100vw', 'important');
+            win.style.setProperty('max-height', '100dvh', 'important');
+            win.style.setProperty('border-radius', '0', 'important');
+        }
+
+        return true;
+    }
+
+    function closeHostMenusBeforeOpen() {
+        document.getElementById('extensionsMenu')?.classList?.remove?.('open');
+        document.querySelectorAll('.drawer-content.openDrawer, .drawer-content.open, .popup, .menu, .list-group')
+            .forEach((node) => {
+                if (node.id !== 'ai_wbr_floating_window' && !node.closest?.('#ai_wbr_floating_window')) {
+                    node.blur?.();
+                }
+            });
     }
 
     function buttonStyle(primary) {
@@ -207,6 +245,8 @@
         if (now - lastOpenAt < 120) return;
         lastOpenAt = now;
 
+        keepPanelUntil = Date.now() + 1600;
+        closeHostMenusBeforeOpen();
         const panel = showPanel(options.message);
 
         try {
@@ -222,22 +262,24 @@
             if (typeof window.aiWbrOpenConsole === 'function') {
                 try {
                     window.aiWbrOpenConsole('overview');
+                    forceConsoleVisible();
                 } catch (error) {
                     coreLoadError = error;
                     showPanel('\u5b8c\u6574\u63a7\u5236\u53f0\u6253\u5f00\u65f6\u62a5\u9519\uff1a' + (error?.message || error));
                     return;
                 }
             } else if (document.getElementById('ai_wbr_floating_window')) {
-                document.getElementById('ai_wbr_floating_window').classList.remove('closing');
-                document.getElementById('ai_wbr_floating_window').classList.add('open');
+                forceConsoleVisible();
             } else if (document.getElementById('ai_wbr_fab')) {
                 document.getElementById('ai_wbr_fab').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                window.setTimeout(forceConsoleVisible, 80);
             }
 
             window.setTimeout(() => {
-                if (document.getElementById('ai_wbr_floating_window')?.classList.contains('open')) {
+                const isVisible = forceConsoleVisible();
+                if (isVisible && Date.now() > keepPanelUntil) {
                     panel?.remove();
-                } else {
+                } else if (!isVisible) {
                     showPanel('\u5165\u53e3\u70b9\u51fb\u5df2\u6536\u5230\uff0c\u4f46\u5b8c\u6574\u63a7\u5236\u53f0\u4ecd\u672a\u8fdb\u5165\u6253\u5f00\u72b6\u6001\u3002\u8bf7\u628a\u4e0b\u9762\u72b6\u6001\u53d1\u7ed9\u6211\u3002');
                 }
             }, 300);
@@ -247,7 +289,8 @@
     function handleOpen(event) {
         event?.preventDefault?.();
         event?.stopPropagation?.();
-        openConsole({ forcePanel: true });
+        event?.stopImmediatePropagation?.();
+        window.setTimeout(() => openConsole({ forcePanel: true }), 80);
     }
 
     function createExtensionMenuEntry() {
@@ -279,8 +322,10 @@
         entry.appendChild(row);
 
         for (const node of [entry, row, icon, label]) {
-            node.addEventListener('click', handleOpen);
-            node.addEventListener('pointerup', handleOpen);
+            node.addEventListener('pointerdown', handleOpen, true);
+            node.addEventListener('touchstart', handleOpen, { capture: true, passive: false });
+            node.addEventListener('click', handleOpen, true);
+            node.addEventListener('pointerup', handleOpen, true);
         }
 
         entry.addEventListener('keydown', (event) => {
@@ -330,8 +375,10 @@
             'backdrop-filter:blur(8px)',
             'cursor:pointer',
         ].join(';');
-        button.addEventListener('click', handleOpen);
-        button.addEventListener('pointerup', handleOpen);
+        button.addEventListener('pointerdown', handleOpen, true);
+        button.addEventListener('touchstart', handleOpen, { capture: true, passive: false });
+        button.addEventListener('click', handleOpen, true);
+        button.addEventListener('pointerup', handleOpen, true);
         (document.body || document.documentElement).appendChild(button);
     }
 
