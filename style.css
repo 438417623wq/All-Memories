@@ -1424,3 +1424,19 @@
         opacity: 0.22;
     }
 }
+
+.ai-wbr-extension-entry {
+    cursor: pointer;
+}
+
+.ai-wbr-extension-row {
+    align-items: center;
+}
+
+.ai-wbr-extension-icon {
+    color: color-mix(in srgb, var(--SmartThemeBodyColor, #fff) 82%, #bfeeff 18%);
+}
+
+.ai-wbr-extension-label {
+    color: var(--SmartThemeBodyColor, #fff);
+}

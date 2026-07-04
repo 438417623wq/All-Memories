@@ -1,6 +1,18 @@
 const BOOT_LOG_PREFIX = '[AI Worldbook Router Bootstrap]';
 const BOOT_ENTRY_ID = 'ai_wbr_bootstrap_entry';
 const BOOT_PANEL_ID = 'ai_wbr_bootstrap_panel';
+const BOOT_MENU_ENTRY_ID = 'ai_wbr_extension_entry';
+const BOOT_MENU_RETRY_LIMIT = 80;
+let bootMenuRetryTimer = null;
+
+function openRouterConsoleFromBootstrap() {
+    const fullButton = document.getElementById('ai_wbr_fab');
+    if (fullButton) {
+        fullButton.click();
+        return;
+    }
+    showBootstrapPanel();
+}
 
 function createBootstrapEntry() {
     if (document.getElementById(BOOT_ENTRY_ID) || document.getElementById('ai_wbr_fab')) {
@@ -31,16 +43,104 @@ function createBootstrapEntry() {
         'cursor:pointer'
     ].join(';');
 
-    button.addEventListener('click', () => {
-        const fullButton = document.getElementById('ai_wbr_fab');
-        if (fullButton) {
-            fullButton.click();
-            return;
-        }
-        showBootstrapPanel();
-    });
+    button.addEventListener('click', openRouterConsoleFromBootstrap);
 
     (document.body || document.documentElement).appendChild(button);
+}
+
+function createExtensionMenuEntry() {
+    const entry = document.createElement('div');
+    entry.id = BOOT_MENU_ENTRY_ID;
+    entry.className = 'extension_container interactable ai-wbr-extension-entry';
+    entry.title = '世界书读取';
+    entry.setAttribute('role', 'button');
+    entry.setAttribute('aria-label', '世界书读取');
+    entry.tabIndex = 0;
+
+    const row = document.createElement('div');
+    row.className = 'list-group-item flex-container flexGap5 interactable ai-wbr-extension-row';
+    row.setAttribute('role', 'listitem');
+    row.tabIndex = 0;
+    row.title = '世界书读取';
+
+    const icon = document.createElement('div');
+    icon.className = 'fa-fw fa-solid fa-network-wired extensionsMenuExtensionButton ai-wbr-extension-icon';
+    icon.setAttribute('role', 'button');
+    icon.tabIndex = 0;
+
+    const label = document.createElement('span');
+    label.className = 'ai-wbr-extension-label';
+    label.textContent = '世界书读取';
+
+    row.append(icon, label);
+    entry.appendChild(row);
+
+    const handleOpen = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openRouterConsoleFromBootstrap();
+    };
+
+    entry.addEventListener('click', handleOpen);
+    row.addEventListener('click', handleOpen);
+    entry.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') handleOpen(event);
+    });
+    row.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') handleOpen(event);
+    });
+
+    return entry;
+}
+
+function mountExtensionMenuEntry() {
+    const host = document.getElementById('extensionsMenu') || document.getElementById('top-settings-holder');
+    if (!host) {
+        return false;
+    }
+
+    let entry = document.getElementById(BOOT_MENU_ENTRY_ID);
+    if (!entry) {
+        entry = createExtensionMenuEntry();
+    }
+
+    if (entry.parentElement !== host) {
+        host.insertBefore(entry, host.firstChild);
+    }
+
+    return true;
+}
+
+function watchExtensionMenuButton() {
+    const button = document.getElementById('extensionsMenuButton');
+    if (!button || button.dataset.aiWbrBound === 'true') {
+        return;
+    }
+
+    button.dataset.aiWbrBound = 'true';
+    button.addEventListener('click', () => {
+        window.setTimeout(mountExtensionMenuEntry, 0);
+        window.setTimeout(mountExtensionMenuEntry, 100);
+        window.setTimeout(mountExtensionMenuEntry, 300);
+    });
+}
+
+function startExtensionMenuMounting() {
+    watchExtensionMenuButton();
+    if (mountExtensionMenuEntry()) {
+        return;
+    }
+
+    let attempts = 0;
+    window.clearInterval(bootMenuRetryTimer);
+    bootMenuRetryTimer = window.setInterval(() => {
+        attempts += 1;
+        watchExtensionMenuButton();
+        if (mountExtensionMenuEntry() || attempts >= BOOT_MENU_RETRY_LIMIT) {
+            window.clearInterval(bootMenuRetryTimer);
+            bootMenuRetryTimer = null;
+        }
+    }, 250);
 }
 
 function showBootstrapPanel(message = '') {
@@ -96,12 +196,14 @@ function showBootstrapPanel(message = '') {
 
 async function loadRouterCore() {
     createBootstrapEntry();
+    startExtensionMenuMounting();
     try {
         await import('./router-core.js');
         const entry = document.getElementById(BOOT_ENTRY_ID);
         if (document.getElementById('ai_wbr_fab')) {
             entry?.remove();
         }
+        startExtensionMenuMounting();
         console.info(`${BOOT_LOG_PREFIX} core loaded`);
     } catch (error) {
         console.error(`${BOOT_LOG_PREFIX} core failed to load`, error);
