@@ -5807,8 +5807,41 @@ function createFloatingMemoryWindow() {
     renderStandaloneConsole('overview');
 }
 
+async function loadSettingsHtml() {
+    if (typeof AI_WBR_SETTINGS_HTML === 'string' && AI_WBR_SETTINGS_HTML.trim()) {
+        return AI_WBR_SETTINGS_HTML;
+    }
+
+    const errors = [];
+    try {
+        const settingsUrl = new URL('./settings.html', import.meta.url);
+        const response = await fetch(settingsUrl.href, { cache: 'no-cache' });
+        if (response.ok) {
+            const html = await response.text();
+            if (html.includes('ai_worldbook_router_settings')) {
+                return html;
+            }
+            errors.push(`settings.html 内容不完整：${settingsUrl.href}`);
+        } else {
+            errors.push(`settings.html 请求失败 ${response.status}：${settingsUrl.href}`);
+        }
+    } catch (error) {
+        errors.push(`按当前脚本目录读取 settings.html 失败：${error?.message || error}`);
+    }
+
+    if (typeof renderExtensionTemplateAsync === 'function') {
+        try {
+            return await renderExtensionTemplateAsync('third-party/ai-worldbook-router', 'settings');
+        } catch (error) {
+            errors.push(`兼容旧目录模板读取失败：${error?.message || error}`);
+        }
+    }
+
+    throw new Error(`世界书读取设置界面加载失败：${errors.join('；') || '未知错误'}`);
+}
+
 async function addSettingsUi() {
-    const html = await renderExtensionTemplateAsync('third-party/ai-worldbook-router', 'settings');
+    const html = await loadSettingsHtml();
     $('#extensions_settings2').append(html);
 
     bindCheckbox('#ai_wbr_enabled', 'enabled');
