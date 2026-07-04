@@ -667,6 +667,7 @@ function setRouterStatus(text) {
     $('#ai_wbr_router_status').text(settings.routerStatus);
     Object.assign(extension_settings[MODULE_NAME], settings);
     saveSettingsDebounced();
+    renderStandaloneConsole();
 }
 
 function getWorldInfoIcon() {
@@ -3806,6 +3807,219 @@ function renderDebugPanel() {
     $('#ai_wbr_injection_text').text(lastRun.injectionText || '尚无本轮注入记录');
     $('#ai_wbr_router_prompt').text(lastRun.routerPrompt || '尚无前置 AI Prompt 记录');
     $('#ai_wbr_router_raw').text(lastRun.routerRaw || '尚无前置 AI 返回记录');
+    renderStandaloneConsole();
+}
+
+function getStandaloneStatusMeta() {
+    if (!settings.enabled) {
+        return { label: '未启用', className: 'idle', icon: 'fa-circle-pause' };
+    }
+    if (lastRun.error) {
+        return { label: '路由异常', className: 'error', icon: 'fa-triangle-exclamation' };
+    }
+    if (lastRun.source && lastRun.source !== 'none') {
+        const isFallback = lastRun.source.includes('fallback');
+        return { label: isFallback ? '已 fallback' : '已命中', className: isFallback ? 'warn' : 'ok', icon: isFallback ? 'fa-rotate' : 'fa-circle-check' };
+    }
+    if (settings.routerStatus && !['未连接', '未启用'].includes(settings.routerStatus)) {
+        return { label: settings.routerStatus, className: 'active', icon: 'fa-bolt' };
+    }
+    return { label: '等待生成', className: 'ready', icon: 'fa-circle-dot' };
+}
+
+function createStandaloneStat(label, value) {
+    return $('<div class="ai-wbr-console-stat"></div>')
+        .append($('<div class="ai-wbr-console-stat-value"></div>').text(value))
+        .append($('<div class="ai-wbr-console-stat-label"></div>').text(label));
+}
+
+function createStandaloneEntryCard(entry, type = 'worldbook', selected = false) {
+    const title = entry.comment || entry.keys?.primary?.[0] || entry.uid || '未命名条目';
+    const source = type === 'memory'
+        ? `${entry.memoryType || 'memory'}#${entry.uid || ''}`
+        : `${entry.world || entry.source || 'worldbook'}#${entry.uid || ''}`;
+    const keys = entry.matchedKeys?.length ? entry.matchedKeys.join(', ') : getEntryKeys(entry).join(', ');
+
+    return $('<div class="ai-wbr-console-entry"></div>')
+        .toggleClass('selected', !!selected)
+        .append($('<div class="ai-wbr-console-entry-head"></div>')
+            .append($('<b></b>').text(title))
+            .append($('<span></span>').text(selected ? '已注入' : '候选')))
+        .append($('<div class="ai-wbr-console-entry-meta"></div>').text(source))
+        .append(keys ? $('<div class="ai-wbr-console-entry-keys"></div>').text(`keys: ${truncateText(keys, 160)}`) : '')
+        .append(entry.reason ? $('<small></small>').text(entry.reason) : '')
+        .append(entry.content ? $('<p></p>').text(truncateText(entry.content, 320)) : '');
+}
+
+function getStandaloneTabId() {
+    return String($('#ai_wbr_console_tabs .ai-wbr-console-tab.active').data('tab') || 'overview');
+}
+
+function parkStandalonePanels() {
+    let parking = $('#ai_wbr_console_parking');
+    if (!parking.length) {
+        parking = $('<div id="ai_wbr_console_parking" class="ai-wbr-console-parking"></div>');
+        $('body').append(parking);
+    }
+    $('#ai_wbr_memory_section, #ai_worldbook_router_settings').detach().appendTo(parking);
+}
+
+function renderStandaloneOverview(container) {
+    const candidates = Array.isArray(lastRun?.candidates) ? lastRun.candidates : [];
+    const selected = Array.isArray(lastRun?.selected) ? lastRun.selected : [];
+    const memoryCandidates = Array.isArray(lastRun?.memoryCandidates) ? lastRun.memoryCandidates : [];
+    const selectedMemories = Array.isArray(lastRun?.selectedMemories) ? lastRun.selectedMemories : [];
+    const status = getStandaloneStatusMeta();
+
+    container.append($('<div class="ai-wbr-console-hero"></div>')
+        .append($('<div></div>')
+            .append($('<div class="ai-wbr-console-kicker"></div>').text('AI Worldbook Router'))
+            .append($('<h3></h3>').text('世界书读取控制台'))
+            .append($('<p></p>').text('生成前筛选相关世界书、记忆与状态，并把命中内容注入本轮 prompt。')))
+        .append($('<div class="ai-wbr-console-status-pill"></div>')
+            .addClass(status.className)
+            .append($(`<i class="fa-solid ${status.icon}"></i>`))
+            .append($('<span></span>').text(status.label))));
+
+    container.append($('<div class="ai-wbr-console-stats"></div>')
+        .append(createStandaloneStat('世界书候选', candidates.length))
+        .append(createStandaloneStat('世界书命中', selected.length))
+        .append(createStandaloneStat('记忆候选', memoryCandidates.length))
+        .append(createStandaloneStat('记忆命中', selectedMemories.length))
+        .append(createStandaloneStat('注入字符', lastRun.injectedChars || 0))
+        .append(createStandaloneStat('路由来源', lastRun.source || 'none')));
+
+    container.append($('<div class="ai-wbr-console-actions"></div>')
+        .append($('<button class="menu_button" type="button"></button>').text(settings.enabled ? '关闭路由' : '启用路由').on('click', () => {
+            saveSetting('enabled', !settings.enabled);
+            $('#ai_wbr_enabled').prop('checked', !!settings.enabled);
+            renderStandaloneConsole();
+        }))
+        .append($('<button class="menu_button" type="button">刷新状态</button>').on('click', () => {
+            renderActiveWorldbookSelector();
+            renderDebugPanel();
+            renderMemoryPanel();
+        }))
+        .append($('<button class="menu_button" type="button">复制注入文本</button>').on('click', async () => {
+            await navigator.clipboard?.writeText?.(lastRun.injectionText || '');
+            toastr?.success?.('已复制本轮注入文本', '世界书读取');
+        })));
+
+    if (lastRun.error) {
+        container.append($('<div class="ai-wbr-console-alert error"></div>').text(lastRun.error));
+    }
+}
+
+function renderStandaloneRoutes(container) {
+    const selectedIds = new Set((lastRun.selected || []).map(entry => getEntryId(entry, entry.uid)));
+    const memorySelectedIds = new Set((lastRun.selectedMemories || []).map(entry => String(entry.uid)));
+    const candidates = Array.isArray(lastRun.candidates) ? lastRun.candidates : [];
+    const memoryCandidates = Array.isArray(lastRun.memoryCandidates) ? lastRun.memoryCandidates : [];
+    const list = $('<div class="ai-wbr-console-entry-list"></div>');
+
+    container.append($('<div class="ai-wbr-console-section-title"></div>').text('世界书路由结果'));
+    if (!candidates.length && !memoryCandidates.length) {
+        list.append($('<div class="ai-wbr-console-empty"></div>').text('尚无路由记录。下一次生成后会显示候选与命中条目。'));
+    }
+    for (const entry of candidates) {
+        list.append(createStandaloneEntryCard(entry, 'worldbook', selectedIds.has(getEntryId(entry, entry.uid))));
+    }
+    for (const entry of memoryCandidates) {
+        list.append(createStandaloneEntryCard(entry, 'memory', memorySelectedIds.has(String(entry.uid))));
+    }
+    container.append(list);
+}
+
+function renderStandaloneInjection(container) {
+    container.append($('<div class="ai-wbr-console-section-head"></div>')
+        .append($('<div class="ai-wbr-console-section-title"></div>').text('本轮最终注入文本'))
+        .append($('<button class="menu_button" type="button">复制</button>').on('click', async () => {
+            await navigator.clipboard?.writeText?.(lastRun.injectionText || '');
+            toastr?.success?.('已复制本轮注入文本', '世界书读取');
+        })));
+    container.append($('<pre class="ai-wbr-console-pre"></pre>').text(lastRun.injectionText || '尚无本轮注入记录'));
+}
+
+function renderStandaloneModel(container) {
+    const panel = $('<div class="ai-wbr-console-form"></div>');
+    panel.append($('<label class="checkbox_label"></label>')
+        .append($('<input type="checkbox" />').prop('checked', !!settings.routerUseSeparateModel).on('input', function () {
+            saveSetting('routerUseSeparateModel', !!$(this).prop('checked'));
+            $('#ai_wbr_router_use_separate_model').prop('checked', !!settings.routerUseSeparateModel);
+            renderStandaloneConsole();
+        }))
+        .append($('<span></span>').text('启用独立路由模型')));
+    panel.append($('<label></label>').text('API URL'));
+    panel.append($('<input class="text_pole" type="text" />').val(settings.routerApiUrl || '').on('input', function () {
+        saveSetting('routerApiUrl', normalizeUrl($(this).val()));
+        $('#ai_wbr_router_api_url').val(settings.routerApiUrl);
+    }));
+    panel.append($('<label></label>').text('API Key'));
+    panel.append($('<input class="text_pole" type="password" />').val(settings.routerApiKey || '').on('input', function () {
+        saveSetting('routerApiKey', String($(this).val() || '').trim());
+        $('#ai_wbr_router_api_key').val(settings.routerApiKey);
+    }));
+    panel.append($('<label></label>').text('路由模型'));
+
+    const select = $('<select class="text_pole"></select>').append('<option value="">未选择</option>');
+    for (const modelId of settings.routerModels || []) {
+        select.append($('<option></option>', { value: modelId, text: modelId, selected: modelId === settings.routerModel }));
+    }
+    if (settings.routerModel && !(settings.routerModels || []).includes(settings.routerModel)) {
+        select.append($('<option></option>', { value: settings.routerModel, text: `${settings.routerModel} (手动)`, selected: true }));
+    }
+    panel.append(select.on('change', function () {
+        saveSetting('routerModel', String($(this).val() || ''));
+        $('#ai_wbr_router_model').val(settings.routerModel);
+    }));
+    panel.append($('<div class="ai-wbr-console-actions"></div>')
+        .append($('<button class="menu_button" type="button">拉取模型</button>').on('click', fetchRouterModels))
+        .append($('<span class="ai-wbr-status"></span>').text(settings.routerStatus || '未连接')));
+    container.append(panel);
+}
+
+function renderStandaloneDebug(container) {
+    container.append($('<div class="ai-wbr-console-section-title"></div>').text('前置 AI Prompt'));
+    container.append($('<pre class="ai-wbr-console-pre"></pre>').text(lastRun.routerPrompt || '尚无前置 AI Prompt 记录'));
+    container.append($('<div class="ai-wbr-console-section-title"></div>').text('前置 AI 原始返回'));
+    container.append($('<pre class="ai-wbr-console-pre"></pre>').text(lastRun.routerRaw || '尚无前置 AI 返回记录'));
+    if (lastRun.error) {
+        container.append($('<div class="ai-wbr-console-section-title"></div>').text('错误'));
+        container.append($('<pre class="ai-wbr-console-pre error"></pre>').text(lastRun.error));
+    }
+}
+
+function renderStandaloneConsole(tabId = getStandaloneTabId()) {
+    const body = $('#ai_wbr_console_body');
+    if (!body.length) {
+        return;
+    }
+
+    parkStandalonePanels();
+    $('#ai_wbr_console_tabs .ai-wbr-console-tab').removeClass('active')
+        .filter(`[data-tab="${escapeCssSelector(tabId)}"]`).addClass('active');
+    body.empty();
+
+    if (tabId === 'overview') {
+        renderStandaloneOverview(body);
+    } else if (tabId === 'routes') {
+        renderStandaloneRoutes(body);
+    } else if (tabId === 'injection') {
+        renderStandaloneInjection(body);
+    } else if (tabId === 'memory') {
+        body.append($('#ai_wbr_memory_section'));
+        renderMemoryPanel();
+    } else if (tabId === 'model') {
+        renderStandaloneModel(body);
+    } else if (tabId === 'debug') {
+        renderStandaloneDebug(body);
+    } else if (tabId === 'settings') {
+        body.append($('#ai_worldbook_router_settings'));
+    }
+
+    const status = getStandaloneStatusMeta();
+    $('#ai_wbr_fab').removeClass('idle ready active ok warn error').addClass(status.className).attr('title', `世界书读取：${status.label}`);
+    $('#ai_wbr_console_status').removeClass('idle ready active ok warn error').addClass(status.className).text(status.label);
 }
 
 function escapeHtml(value) {
@@ -5432,23 +5646,27 @@ function createFloatingMemoryWindow() {
         return;
     }
 
-    const fab = $('<div id="ai_wbr_fab" class="ai-wbr-fab" title="打开记忆图谱"><i class="fa-solid fa-circle-chevron-down"></i></div>');
+    const fab = $('<div id="ai_wbr_fab" class="ai-wbr-fab" title="打开世界书读取控制台"><i class="fa-solid fa-network-wired"></i></div>');
     // 注意：局部变量命名为 win，避免遮蔽全局 window 对象（拖拽时需要用 window.innerWidth/innerHeight 取视口尺寸）
     const win = $('<div id="ai_wbr_floating_window" class="ai-wbr-floating-window">' +
         '<div class="ai-wbr-floating-header" id="ai_wbr_floating_header">' +
-            '<div class="ai-wbr-floating-title"><i class="fa-solid fa-network-wired"></i> 记忆图谱</div>' +
+            '<div class="ai-wbr-floating-title"><i class="fa-solid fa-network-wired"></i> 世界书读取 <span id="ai_wbr_console_status" class="ai-wbr-console-status">等待生成</span></div>' +
             '<div class="ai-wbr-floating-close" id="ai_wbr_floating_close"><i class="fa-solid fa-times"></i></div>' +
         '</div>' +
-        '<div class="ai-wbr-floating-content" id="ai_wbr_floating_content"></div>' +
+        '<div class="ai-wbr-console-tabs" id="ai_wbr_console_tabs">' +
+            '<button class="ai-wbr-console-tab active" type="button" data-tab="overview">总览</button>' +
+            '<button class="ai-wbr-console-tab" type="button" data-tab="routes">路由</button>' +
+            '<button class="ai-wbr-console-tab" type="button" data-tab="injection">注入</button>' +
+            '<button class="ai-wbr-console-tab" type="button" data-tab="memory">记忆</button>' +
+            '<button class="ai-wbr-console-tab" type="button" data-tab="model">模型</button>' +
+            '<button class="ai-wbr-console-tab" type="button" data-tab="debug">调试</button>' +
+            '<button class="ai-wbr-console-tab" type="button" data-tab="settings">设置</button>' +
+        '</div>' +
+        '<div class="ai-wbr-floating-content ai-wbr-console-body" id="ai_wbr_console_body"></div>' +
     '</div>');
 
     $('body').append(fab).append(win);
-
-    // DOM move: 把整个记忆 section 移入悬浮窗内容区，保留所有 #ai_wbr_memory_* id 与事件绑定
-    const memorySection = $('#ai_wbr_memory_section');
-    if (memorySection.length) {
-        memorySection.appendTo('#ai_wbr_floating_content');
-    }
+    parkStandalonePanels();
 
     // 切换悬浮窗显隐
     function toggleWindow() {
@@ -5460,10 +5678,9 @@ function createFloatingMemoryWindow() {
             }, 220); // 与 CSS 关闭动画时长一致
         } else {
             win.removeClass('closing').addClass('open');
-            // 打开后重新渲染记忆面板，让 SVG 适配悬浮窗容器尺寸
-            renderMemoryPanel();
-            // 动画结束后再渲染一次，确保 SVG 取到动画终态的准确尺寸
-            setTimeout(renderMemoryPanel, 340);
+            renderStandaloneConsole();
+            // 动画结束后再渲染一次，确保记忆 SVG 取到动画终态的准确尺寸
+            setTimeout(() => renderStandaloneConsole(), 340);
         }
     }
 
@@ -5519,6 +5736,9 @@ function createFloatingMemoryWindow() {
     });
 
     $('#ai_wbr_floating_close').on('click', toggleWindow);
+    $('#ai_wbr_console_tabs').on('click', '.ai-wbr-console-tab', function () {
+        renderStandaloneConsole(String($(this).data('tab') || 'overview'));
+    });
 
     // ESC 关闭
     $(document).on('keydown', (event) => {
@@ -5583,6 +5803,8 @@ function createFloatingMemoryWindow() {
             $('body').css('user-select', '');
         }
     });
+
+    renderStandaloneConsole('overview');
 }
 
 async function addSettingsUi() {
