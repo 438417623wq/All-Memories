@@ -1,5 +1,14 @@
 # 世界书读取
 
+## 来源与授权说明
+
+- 原项目地址：https://github.com/wominIII/ai-worldbook-router
+- 原作者：zmer
+- 本仓库保留原项目来源、作者信息与插件主体文件。
+- 截至本次整理时，原仓库内未发现 `LICENSE` / `LICENCE` / `COPYING` 等开源许可证文件，也未在 README 中发现明确许可证声明。
+- 因此，本仓库不擅自为原项目追加或替换许可证；使用、修改、再分发时请以原作者后续发布的授权说明为准。
+- `ai-worldbook-router.user.js` 与 `ai-worldbook-router.tavern-helper.json` 是基于原项目 `0.3.6` 转换生成的酒馆助手/脚本导入版本。
+
 一个用于 **SillyTavern** 的前置世界书路由插件。
 
 它不会替代 SillyTavern 原生世界书，而是在正式生成回复之前增加一层“前置 AI 路由”：
